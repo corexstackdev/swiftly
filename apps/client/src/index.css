@@ -1,0 +1,172 @@
+@import 'tailwindcss';
+
+:root {
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* react-grid-layout's placeholder defaults to red; align it with the canvas. */
+.react-grid-item.react-grid-placeholder {
+  background: rgb(59 130 246 / 0.15);
+  border: 1px dashed rgb(59 130 246 / 0.6);
+  border-radius: 4px;
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * Resize handles
+ *
+ * react-resizable ships one visible handle in the bottom-right corner and
+ * stamps the same diagonal-hatch image onto every other one, which on an edge
+ * reads as a smudge rather than a grip. With eight handles per widget they need
+ * to be legible, land where the pointer expects them, and stay out of the way
+ * until the widget is hovered or selected.
+ * ------------------------------------------------------------------ */
+
+.react-grid-item > .react-resizable-handle {
+  background-image: none;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  /* Above the widget's own content, so a table or an iframe cannot swallow the
+     pointer before the handle sees it. */
+  z-index: 3;
+}
+
+.react-grid-item:hover > .react-resizable-handle,
+.react-grid-item > div.is-selected ~ .react-resizable-handle,
+.react-grid-item:focus-within > .react-resizable-handle {
+  opacity: 1;
+}
+
+/*
+ * Undo react-grid-layout's 45-degree rotation.
+ *
+ * It rotates every handle so one diagonal-hatch image can serve all eight
+ * directions. These handles are drawn as bars and squares instead, so the
+ * rotation is not merely unnecessary — it is harmful. An edge handle stretched
+ * down a tall container becomes a ~550px diagonal once rotated, which pushed
+ * content hundreds of pixels past the canvas and gave neighbouring handles huge
+ * overlapping hit areas that stole each other's pointer events.
+ *
+ * The rotation is set with a two-class selector, so undoing it needs at least
+ * that specificity; the extra ancestor makes it unambiguous regardless of the
+ * order the two stylesheets land in.
+ */
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-n,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-s,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-w,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-e,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-nw,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-ne,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-sw,
+.react-grid-layout .react-grid-item > .react-resizable-handle.react-resizable-handle-se {
+  transform: none;
+}
+
+/* Edges: a thin bar with a hit area wider than the bar, so the pointer does not
+   have to be pixel-accurate. */
+.react-grid-item > .react-resizable-handle-n,
+.react-grid-item > .react-resizable-handle-s {
+  left: 12px;
+  right: 12px;
+  width: auto;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.react-grid-item > .react-resizable-handle-w,
+.react-grid-item > .react-resizable-handle-e {
+  top: 12px;
+  bottom: 12px;
+  height: auto;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.react-grid-item > .react-resizable-handle-n::after,
+.react-grid-item > .react-resizable-handle-s::after,
+.react-grid-item > .react-resizable-handle-w::after,
+.react-grid-item > .react-resizable-handle-e::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 2px;
+  background: rgb(59 130 246 / 0.55);
+}
+
+.react-grid-item > .react-resizable-handle-n::after,
+.react-grid-item > .react-resizable-handle-s::after {
+  height: 3px;
+}
+
+.react-grid-item > .react-resizable-handle-w::after,
+.react-grid-item > .react-resizable-handle-e::after {
+  width: 3px;
+}
+
+.react-grid-item > .react-resizable-handle-n { top: -5px; }
+.react-grid-item > .react-resizable-handle-s { bottom: -5px; }
+.react-grid-item > .react-resizable-handle-w { left: -5px; }
+.react-grid-item > .react-resizable-handle-e { right: -5px; }
+
+/* Corners: a small square, drawn on top of the edge bars. */
+.react-grid-item > .react-resizable-handle-nw,
+.react-grid-item > .react-resizable-handle-ne,
+.react-grid-item > .react-resizable-handle-sw,
+.react-grid-item > .react-resizable-handle-se {
+  width: 14px;
+  height: 14px;
+  z-index: 4;
+}
+
+.react-grid-item > .react-resizable-handle-nw::after,
+.react-grid-item > .react-resizable-handle-ne::after,
+.react-grid-item > .react-resizable-handle-sw::after,
+.react-grid-item > .react-resizable-handle-se::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: #ffffff;
+  border: 1.5px solid rgb(37 99 235);
+}
+
+.react-grid-item > .react-resizable-handle-nw { top: -7px; left: -7px; cursor: nwse-resize; }
+.react-grid-item > .react-resizable-handle-ne { top: -7px; right: -7px; cursor: nesw-resize; }
+.react-grid-item > .react-resizable-handle-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
+.react-grid-item > .react-resizable-handle-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+
+/*
+ * A container's own handles must win over its children's. Without this the
+ * handles of a child sitting in the corner of a container cover the container's,
+ * and the container becomes the one widget on the page that cannot be resized.
+ */
+.nested-canvas .react-grid-item > .react-resizable-handle {
+  z-index: 1;
+}
+
+.nested-canvas .react-grid-item > .react-resizable-handle-nw,
+.nested-canvas .react-grid-item > .react-resizable-handle-ne,
+.nested-canvas .react-grid-item > .react-resizable-handle-sw,
+.nested-canvas .react-grid-item > .react-resizable-handle-se {
+  z-index: 2;
+}
+
+/* While a widget is being dragged or resized it should float above everything,
+   including a container it is passing over. */
+.react-grid-item.react-draggable-dragging,
+.react-grid-item.resizing {
+  z-index: 10;
+}

@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vinodapp-postgres
+    environment:
+      POSTGRES_USER: vinodapp
+      POSTGRES_PASSWORD: vinodapp_dev
+      POSTGRES_DB: vinodapp
+    ports:
+      - '5442:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U vinodapp']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: vinodapp-redis
+    ports:
+      - '6399:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Sample target database for developing and testing datasource plugins.
+  # Not part of the platform; gives the Postgres plugin something real to query.
+  sample-db:
+    image: postgres:16-alpine
+    container_name: vinodapp-sample-db
+    environment:
+      POSTGRES_USER: sample
+      POSTGRES_PASSWORD: sample_dev
+      POSTGRES_DB: sample
+    ports:
+      - '5443:5432'
+    volumes:
+      - sampledata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+  redisdata:
+  sampledata:

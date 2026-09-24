@@ -1,0 +1,389 @@
+// Platform metadata store. Application *data* lives in tenant datasources;
+// this database holds only the platform's own records.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/* ------------------------------------------------------------------ *
+ * Tenancy
+ * ------------------------------------------------------------------ */
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  /// Deployment region serving this org (architecture section 9).
+  region    String   @default("default")
+  /// When true, this org's data must not leave its region.
+  dataResidency Boolean @default(false)
+  settings  Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members           OrganizationMember[]
+  workspaces        Workspace[]
+  roles             Role[]
+  datasources       Datasource[]
+  environments      Environment[]
+  identityProviders IdentityProvider[]
+  groupMappings     GroupRoleMapping[]
+  customComponents  CustomComponent[]
+  auditLogs         AuditLog[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String
+  avatarUrl    String?
+  /// Null for users that authenticate only through an external IdP.
+  passwordHash String?
+  /// Platform operator, outside the org permission model.
+  isSuperAdmin Boolean   @default(false)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  memberships       OrganizationMember[]
+  workspaceMembers  WorkspaceMember[]
+  identities        UserIdentity[]
+  createdApps       Application[]        @relation("AppCreatedBy")
+  submittedVersions ApplicationVersion[] @relation("VersionSubmittedBy")
+  reviewedVersions  ApplicationVersion[] @relation("VersionReviewedBy")
+  createdDatasources Datasource[]
+  auditLogs         AuditLog[]
+
+  @@map("users")
+}
+
+/// Links a user to an external identity (AD DN, Entra object id, SAML NameID).
+model UserIdentity {
+  id                 String   @id @default(uuid())
+  userId             String
+  identityProviderId String
+  /// Stable external subject: LDAP DN, OIDC `sub`, or SAML NameID.
+  externalId         String
+  /// Group memberships from the last login, used to recompute roles.
+  /// JSON array of group names from the identity provider.
+  externalGroups     Json
+  lastSyncedAt       DateTime @default(now())
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  identityProvider IdentityProvider @relation(fields: [identityProviderId], references: [id], onDelete: Cascade)
+
+  @@unique([identityProviderId, externalId])
+  @@index([userId])
+  @@map("user_identities")
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  roleId         String
+  joinedAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+/* ------------------------------------------------------------------ *
+ * RBAC — permissions are strings like 'app:publish'; roles bundle them
+ * ------------------------------------------------------------------ */
+
+model Role {
+  id             String  @id @default(uuid())
+  /// Null for built-in roles available to every org.
+  organizationId String?
+  name           String
+  description    String?
+  isSystem       Boolean @default(false)
+  /// JSON array of permission keys. Read through parsePermissions().
+  permissions    Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization     Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orgMembers       OrganizationMember[]
+  workspaceMembers WorkspaceMember[]
+  groupMappings    GroupRoleMapping[]
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+/// Maps an AD/OIDC group onto a platform role, so IT controls access from the
+/// directory without touching the platform.
+model GroupRoleMapping {
+  id             String @id @default(uuid())
+  organizationId String
+  /// Group name or DN as it appears in the directory.
+  externalGroup  String
+  roleId         String
+  /// Null applies the role org-wide; set to scope it to one workspace.
+  workspaceId    String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, externalGroup, workspaceId])
+  @@map("group_role_mappings")
+}
+
+/* ------------------------------------------------------------------ *
+ * Identity providers — configured per organization
+ * ------------------------------------------------------------------ */
+
+model IdentityProvider {
+  id             String               @id @default(uuid())
+  organizationId String
+  /// One of: LOCAL, LDAP, OIDC, SAML. See IDENTITY_PROVIDER_TYPES.
+  type           String
+  name           String
+  isEnabled      Boolean              @default(true)
+  /// Non-secret settings (URLs, base DN, attribute mapping).
+  config         Json
+  /// Secrets (bind password, client secret), AES-256-GCM.
+  encryptedSecrets String?
+  /// Create a platform user on first successful external login.
+  autoProvision  Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  identities   UserIdentity[]
+
+  @@unique([organizationId, name])
+  @@map("identity_providers")
+}
+
+/* ------------------------------------------------------------------ *
+ * Workspaces and applications
+ * ------------------------------------------------------------------ */
+
+model Workspace {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  slug           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members       WorkspaceMember[]
+  applications  Application[]
+  datasources   Datasource[]
+  groupMappings GroupRoleMapping[]
+
+  @@unique([organizationId, slug])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String @id @default(uuid())
+  workspaceId String
+  userId      String
+  roleId      String
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+model Application {
+  id          String            @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String
+  icon        String?
+  description String?
+  /// One of: DRAFT, PUBLISHED, ARCHIVED. See APPLICATION_STATUS.
+  status      String            @default("DRAFT")
+  /// The live, editable DSL. Mutated on every editor save.
+  draftDsl    Json
+  /// Monotonic counter for optimistic concurrency on editor saves.
+  draftRevision Int             @default(0)
+  /// Points at the version end users currently receive.
+  publishedVersionId String?    @unique
+  createdById String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy        User                 @relation("AppCreatedBy", fields: [createdById], references: [id])
+  versions         ApplicationVersion[] @relation("AppVersions")
+  publishedVersion ApplicationVersion?  @relation("AppPublishedVersion", fields: [publishedVersionId], references: [id])
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@map("applications")
+}
+
+/// An immutable DSL snapshot. Created on submit, never edited afterwards.
+model ApplicationVersion {
+  id            String        @id @default(uuid())
+  applicationId String
+  versionNumber Int
+  /// One of: PENDING_REVIEW, APPROVED, REJECTED, PUBLISHED, ROLLED_BACK, ARCHIVED. See VERSION_STATUS.
+  status        String        @default("PENDING_REVIEW")
+  /// Frozen copy of the full application DSL.
+  dsl           Json
+  /// Builder's note explaining what changed.
+  changeNote    String?
+  submittedById String
+  submittedAt   DateTime      @default(now())
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNotes   String?
+  publishedAt   DateTime?
+
+  application      Application  @relation("AppVersions", fields: [applicationId], references: [id], onDelete: Cascade)
+  submittedBy      User         @relation("VersionSubmittedBy", fields: [submittedById], references: [id])
+  reviewedBy       User?        @relation("VersionReviewedBy", fields: [reviewedById], references: [id])
+  publishedForApp  Application? @relation("AppPublishedVersion")
+
+  @@unique([applicationId, versionNumber])
+  @@index([applicationId, status])
+  @@map("application_versions")
+}
+
+/* ------------------------------------------------------------------ *
+ * Datasources — credentials are per environment
+ * ------------------------------------------------------------------ */
+
+model Environment {
+  id             String  @id @default(uuid())
+  organizationId String
+  /// 'dev', 'staging', 'prod'.
+  name           String
+  isDefault      Boolean @default(false)
+  /// Publishing to this environment requires the 'app:publish' permission.
+  isProduction   Boolean @default(false)
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  configs      DatasourceConfig[]
+
+  @@unique([organizationId, name])
+  @@map("environments")
+}
+
+model Datasource {
+  id             String   @id @default(uuid())
+  organizationId String
+  /// Null makes the datasource shared across the whole org.
+  workspaceId    String?
+  name           String
+  /// Plugin registry key: 'postgres', 'mysql', 'rest', ...
+  pluginId       String
+  /// Refuse write statements regardless of what a query asks for.
+  readOnly       Boolean  @default(false)
+  /// Cached introspection result, refreshed on demand.
+  schemaCache    Json?
+  schemaCachedAt DateTime?
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy    User               @relation(fields: [createdById], references: [id])
+  configs      DatasourceConfig[]
+
+  @@unique([organizationId, name])
+  @@index([workspaceId])
+  @@map("datasources")
+}
+
+/// Connection settings for one datasource in one environment. The secret half is
+/// encrypted with AES-256-GCM and never returned to the client.
+model DatasourceConfig {
+  id            String   @id @default(uuid())
+  datasourceId  String
+  environmentId String
+  /// Non-secret fields (host, port, database) in clear, for display.
+  publicConfig  Json
+  /// Ciphertext of the secret fields.
+  encryptedConfig String
+  /// Random IV, hex.
+  iv            String
+  /// GCM authentication tag, hex.
+  authTag       String
+  updatedAt     DateTime @updatedAt
+
+  datasource  Datasource  @relation(fields: [datasourceId], references: [id], onDelete: Cascade)
+  environment Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@unique([datasourceId, environmentId])
+  @@map("datasource_configs")
+}
+
+/* ------------------------------------------------------------------ *
+ * Tenant-authored components
+ * ------------------------------------------------------------------ */
+
+model CustomComponent {
+  id             String             @id @default(uuid())
+  organizationId String
+  /// Registered as 'custom:{name}'.
+  name           String
+  version        String
+  /// CustomComponentManifest from @vinodapp/shared.
+  manifest       Json
+  /// Storage key of the uploaded ESM bundle.
+  bundlePath     String
+  /// One of: IFRAME, INLINE. See COMPONENT_ISOLATION.
+  isolation      String             @default("IFRAME")
+  isEnabled      Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name, version])
+  @@map("custom_components")
+}
+
+/* ------------------------------------------------------------------ *
+ * Audit
+ * ------------------------------------------------------------------ */
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  /// Null for system-initiated actions.
+  actorId        String?
+  /// 'application.publish', 'datasource.create', 'query.execute', ...
+  action         String
+  resourceType   String
+  resourceId     String?
+  metadata       Json
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, action])
+  @@index([resourceType, resourceId])
+  @@map("audit_logs")
+}
