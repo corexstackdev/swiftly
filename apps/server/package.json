@@ -1,5 +1,5 @@
 {
-  "name": "@vinodapp/server",
+  "name": "@swiftly/server",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -39,7 +39,7 @@
     "rxjs": "^7.8.1",
     "undici": "^7.2.0",
     "zod": "^3.24.1",
-    "@vinodapp/shared": "workspace:*",
+    "@swiftly/shared": "workspace:*",
     "fastify": "^5.2.1"
   },
   "devDependencies": {

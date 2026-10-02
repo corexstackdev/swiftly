@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import clsx from 'clsx';
-import type { DbSchema, QueryResult, TestResult } from '@vinodapp/shared';
+import type { DbSchema, QueryResult, TestResult } from '@swiftly/shared';
 import {
   api,
   type DatasourceSummary,

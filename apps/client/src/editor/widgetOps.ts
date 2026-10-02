@@ -1,4 +1,4 @@
-import type { PageDsl, WidgetDsl } from '@vinodapp/shared';
+import type { PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getChromeRows, getWidgetDefinition } from '@/widgets/registry';
 
 /**
@@ -24,6 +24,27 @@ export function findWidgetByName(widgets: WidgetDsl[], name: string): WidgetDsl 
     if (found) return found;
   }
   return undefined;
+}
+
+/**
+ * Lowest row where a new widget of this size does not sit on top of a sibling.
+ * Used when dropping into a container so a second control is not stacked on the first.
+ */
+export function firstFreeRow(
+  siblings: WidgetDsl[],
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): number {
+  let row = Math.max(0, y);
+  const overlaps = (candidate: number) =>
+    siblings.some((sibling) => {
+      const box = sibling.layout;
+      return candidate < box.y + box.h && candidate + h > box.y && x < box.x + box.w && x + w > box.x;
+    });
+  while (overlaps(row)) row += 1;
+  return row;
 }
 
 /** The array a widget belongs to: the page root, or a container's children. */

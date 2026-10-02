@@ -1,4 +1,4 @@
-import type { PropertyDefinition } from '@vinodapp/shared';
+import type { PropertyDefinition } from '@swiftly/shared';
 
 /**
  * Colours for one interaction state.

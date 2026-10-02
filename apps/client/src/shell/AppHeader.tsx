@@ -26,10 +26,10 @@ export function AppHeader({ reviewCount }: { reviewCount?: number }) {
           {/* The same mark the editor rail carries, so the product reads as one
               thing rather than two screens that happen to share a login. */}
           <span className="flex h-8 w-8 items-center justify-center rounded border-2 border-orange-500 font-mono text-sm font-bold text-slate-900">
-            a
+            S
           </span>
           <span className="text-sm font-semibold tracking-tight text-slate-900">
-            Low-code Platform
+            Swiftly
           </span>
         </Link>
 

@@ -11,3 +11,4 @@ coverage/
 apps/server/prisma/*.db
 apps/server/prisma/*.db-journal
 apps/*/.env
+.env.example

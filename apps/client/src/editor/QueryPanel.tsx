@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { DbSchema, QueryEntity, QueryResult } from '@vinodapp/shared';
+import type { DbSchema, QueryEntity, QueryResult } from '@swiftly/shared';
 import { api, type DatasourceSummary } from '@/lib/api';
 
 /**

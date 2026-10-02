@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import type { NavItemDsl, NavigationDsl } from '@vinodapp/shared';
+import type { NavItemDsl, NavigationDsl } from '@swiftly/shared';
 import type { AppRuntime, Notification } from './useAppRuntime';
 
 /**

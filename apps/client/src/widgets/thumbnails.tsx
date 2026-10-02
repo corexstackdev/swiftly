@@ -174,6 +174,15 @@ export const THUMBNAILS: Record<string, React.ReactNode> = {
     </Bare>
   ),
 
+  form: (
+    <Frame dashed>
+      {bar(6, 6, 14, 2)}
+      {bar(6, 10, 28, 3)}
+      {bar(6, 16, 20, 3)}
+      <rect x="22" y="22" width="16" height="4.5" rx="1.2" fill={ACCENT} />
+    </Frame>
+  ),
+
   /* ---- buttons ---- */
   button: (
     <Bare>

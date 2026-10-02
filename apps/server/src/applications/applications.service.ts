@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import type { ApplicationDsl } from '@vinodapp/shared';
-import { DSL_VERSION } from '@vinodapp/shared';
+import type { ApplicationDsl } from '@swiftly/shared';
+import { DSL_VERSION } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 

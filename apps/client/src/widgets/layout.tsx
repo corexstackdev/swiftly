@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
-import type { TabDefinition, WidgetDsl } from '@vinodapp/shared';
+import type { TabDefinition, WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { normaliseTabs } from '@/editor/TabListEditor';
 import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';

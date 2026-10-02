@@ -1,5 +1,5 @@
 import { Controller, ForbiddenException, Get, NotFoundException, Param } from '@nestjs/common';
-import type { ApplicationDsl } from '@vinodapp/shared';
+import type { ApplicationDsl } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { CurrentUser, RequirePermissions, type AuthenticatedUser } from '../common/decorators';
 import { PERMISSIONS } from '../common/permissions';

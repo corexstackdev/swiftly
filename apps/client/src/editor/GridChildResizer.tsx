@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { WidgetDsl } from '@vinodapp/shared';
+import type { WidgetDsl } from '@swiftly/shared';
 
 /**
  * Resize handles for a widget sitting in a Grid cell.
@@ -12,6 +12,8 @@ import type { WidgetDsl } from '@vinodapp/shared';
  *
  * These handles drag in pixels and commit in cells: the pointer moves freely, the
  * span snaps to whole cells, and the preview shows which span it will land on.
+ * Every edge and corner is live so shrinking from the top or expanding from the
+ * left is the same gesture as on the page canvas.
  */
 
 interface DragState {
@@ -24,12 +26,29 @@ interface DragState {
   maxColSpan: number;
 }
 
+type Edges = { n?: boolean; s?: boolean; e?: boolean; w?: boolean };
+
+type HandlePosition = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+const HANDLES: { position: HandlePosition; edges: Edges }[] = [
+  { position: 'n', edges: { n: true } },
+  { position: 's', edges: { s: true } },
+  { position: 'e', edges: { e: true } },
+  { position: 'w', edges: { w: true } },
+  { position: 'ne', edges: { n: true, e: true } },
+  { position: 'nw', edges: { n: true, w: true } },
+  { position: 'se', edges: { s: true, e: true } },
+  { position: 'sw', edges: { s: true, w: true } },
+];
+
 export function GridChildResizer({
   child,
+  selected = false,
   onCommit,
   children,
 }: {
   child: WidgetDsl;
+  selected?: boolean;
   onCommit: (patch: { colSpan?: number; rowSpan?: number }) => void;
   children: React.ReactNode;
 }) {
@@ -37,7 +56,7 @@ export function GridChildResizer({
   const dragRef = useRef<DragState | null>(null);
   const [preview, setPreview] = useState<{ colSpan: number; rowSpan: number } | null>(null);
 
-  const begin = (event: React.PointerEvent, axis: 'x' | 'y' | 'both'): void => {
+  const begin = (event: React.PointerEvent, edges: Edges): void => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -89,13 +108,31 @@ export function GridChildResizer({
 
       const next = { colSpan: drag.startColSpan, rowSpan: drag.startRowSpan };
 
-      if (axis !== 'y' && drag.columnUnit > 0) {
-        const delta = Math.round((moveEvent.clientX - drag.startX) / drag.columnUnit);
-        next.colSpan = clamp(drag.startColSpan + delta, 1, drag.maxColSpan);
+      if (edges.e && drag.columnUnit > 0) {
+        next.colSpan = clamp(
+          drag.startColSpan + Math.round((moveEvent.clientX - drag.startX) / drag.columnUnit),
+          1,
+          drag.maxColSpan,
+        );
       }
-      if (axis !== 'x' && drag.rowUnit > 0) {
-        const delta = Math.round((moveEvent.clientY - drag.startY) / drag.rowUnit);
-        next.rowSpan = Math.max(1, drag.startRowSpan + delta);
+      if (edges.w && drag.columnUnit > 0) {
+        next.colSpan = clamp(
+          drag.startColSpan + Math.round((drag.startX - moveEvent.clientX) / drag.columnUnit),
+          1,
+          drag.maxColSpan,
+        );
+      }
+      if (edges.s && drag.rowUnit > 0) {
+        next.rowSpan = Math.max(
+          1,
+          drag.startRowSpan + Math.round((moveEvent.clientY - drag.startY) / drag.rowUnit),
+        );
+      }
+      if (edges.n && drag.rowUnit > 0) {
+        next.rowSpan = Math.max(
+          1,
+          drag.startRowSpan + Math.round((drag.startY - moveEvent.clientY) / drag.rowUnit),
+        );
       }
 
       setPreview(next);
@@ -129,10 +166,14 @@ export function GridChildResizer({
     <div ref={wrapperRef} className="relative h-full w-full">
       {children}
 
-      {/* The dotted cell guide is the border; these stay out of its way. */}
-      <Handle position="e" onPointerDown={(event) => begin(event, 'x')} />
-      <Handle position="s" onPointerDown={(event) => begin(event, 'y')} />
-      <Handle position="se" onPointerDown={(event) => begin(event, 'both')} />
+      {HANDLES.map((handle) => (
+        <Handle
+          key={handle.position}
+          position={handle.position}
+          selected={selected}
+          onPointerDown={(event) => begin(event, handle.edges)}
+        />
+      ))}
 
       {preview && (
         <span className="pointer-events-none absolute right-1 bottom-1 z-30 rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-medium text-white tabular-nums">
@@ -146,47 +187,79 @@ export function GridChildResizer({
 /**
  * A handle is a hit area first and a mark second.
  *
- * The grip is what the cell guide already draws, so an edge shows nothing until
- * the pointer is actually on it, and then only a hairline. The corner is the one
- * affordance worth advertising, and only for the cell being hovered.
+ * Edges stay faint until the cell is hovered or selected; corners keep a square
+ * so the grip is obvious. The hit area is larger than the mark so shrinking
+ * does not require pixel-accurate aiming.
  */
 function Handle({
   position,
+  selected,
   onPointerDown,
 }: {
-  position: 'e' | 's' | 'se';
+  position: HandlePosition;
+  selected: boolean;
   onPointerDown: (event: React.PointerEvent) => void;
 }) {
-  if (position === 'se') {
-    return (
-      <span
-        onPointerDown={onPointerDown}
-        onClick={(event) => event.stopPropagation()}
-        className="absolute right-[-3px] bottom-[-3px] z-20 h-2 w-2 cursor-nwse-resize rounded-full border border-blue-600 bg-white opacity-0 transition-opacity group-hover/cell:opacity-100"
-      />
-    );
-  }
+  const corner = position.length === 2;
 
   return (
     <span
       onPointerDown={onPointerDown}
       onClick={(event) => event.stopPropagation()}
       className={clsx(
-        'group/handle absolute z-20 flex items-center justify-center',
-        position === 'e'
-          ? 'top-2 right-[-3px] bottom-2 w-1.5 cursor-ew-resize'
-          : 'right-2 bottom-[-3px] left-2 h-1.5 cursor-ns-resize',
+        'absolute z-20',
+        visibleClass(selected),
+        HANDLE_BOX[position],
+        HANDLE_CURSOR[position],
       )}
     >
       <span
         className={clsx(
-          'block rounded-full bg-blue-500 opacity-0 transition-opacity group-hover/handle:opacity-100',
-          position === 'e' ? 'h-full w-0.5' : 'h-0.5 w-full',
+          'block',
+          corner
+            ? 'h-2 w-2 rounded-sm border border-blue-600 bg-white'
+            : 'rounded-full bg-blue-500/70',
+          !corner && EDGE_MARK[position],
         )}
       />
     </span>
   );
 }
+
+function visibleClass(selected: boolean): string {
+  return selected
+    ? 'opacity-100'
+    : 'opacity-0 transition-opacity group-hover/cell:opacity-100';
+}
+
+const HANDLE_BOX: Record<HandlePosition, string> = {
+  n: 'top-[-4px] right-3 left-3 flex h-2.5 items-center justify-center',
+  s: 'right-3 bottom-[-4px] left-3 flex h-2.5 items-center justify-center',
+  e: 'top-3 right-[-4px] bottom-3 flex w-2.5 items-center justify-center',
+  w: 'top-3 bottom-3 left-[-4px] flex w-2.5 items-center justify-center',
+  ne: 'top-[-5px] right-[-5px] flex h-3.5 w-3.5 items-center justify-center',
+  nw: 'top-[-5px] left-[-5px] flex h-3.5 w-3.5 items-center justify-center',
+  se: 'right-[-5px] bottom-[-5px] flex h-3.5 w-3.5 items-center justify-center',
+  sw: 'bottom-[-5px] left-[-5px] flex h-3.5 w-3.5 items-center justify-center',
+};
+
+const HANDLE_CURSOR: Record<HandlePosition, string> = {
+  n: 'cursor-ns-resize',
+  s: 'cursor-ns-resize',
+  e: 'cursor-ew-resize',
+  w: 'cursor-ew-resize',
+  ne: 'cursor-nesw-resize',
+  nw: 'cursor-nwse-resize',
+  se: 'cursor-nwse-resize',
+  sw: 'cursor-nesw-resize',
+};
+
+const EDGE_MARK: Record<'n' | 's' | 'e' | 'w', string> = {
+  n: 'h-0.5 w-full',
+  s: 'h-0.5 w-full',
+  e: 'h-full w-0.5',
+  w: 'h-full w-0.5',
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));

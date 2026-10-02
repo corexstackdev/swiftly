@@ -5,7 +5,7 @@ import type {
   QueryDefinition,
   RawSqlDefinition,
   StoredProcedureDefinition,
-} from '@vinodapp/shared';
+} from '@swiftly/shared';
 import {
   classifyStatement,
   extractBindings,

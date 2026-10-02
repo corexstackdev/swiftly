@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import type { TabDefinition, TabDisplayMode, TabStateStyle } from '@vinodapp/shared';
+import type { TabDefinition, TabDisplayMode, TabStateStyle } from '@swiftly/shared';
 
 /**
  * Editor for a Tabs widget's tab list.

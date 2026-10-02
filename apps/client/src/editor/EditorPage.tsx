@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Link, useParams } from 'react-router-dom';
 import type { Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import type { ApplicationDsl, PageDsl, QueryEntity, WidgetDsl } from '@vinodapp/shared';
+import type { ApplicationDsl, PageDsl, QueryEntity, WidgetDsl } from '@swiftly/shared';
 import { api, type DatasourceSummary, type Environment, ApiError } from '@/lib/api';
 import { useSession } from '@/lib/session';
 import { useAppRuntime } from '@/runtime/useAppRuntime';
@@ -13,6 +13,7 @@ import { BottomBar } from '@/shell/BottomBar';
 import { defaultProperties, getWidgetDefinition } from '@/widgets/registry';
 import { useDslHistory } from './useDslHistory';
 import { Canvas } from './Canvas';
+import { acceptPaletteDrag, dropParentId, takePaletteDrop } from './paletteDrag';
 import { EntityPanel } from './EntityPanel';
 import { PagesDropdown } from './PagesDropdown';
 import { PropertyPanel } from './PropertyPanel';
@@ -22,6 +23,7 @@ import {
   childListOf,
   findParent,
   findWidget,
+  firstFreeRow,
   fitAllContainers,
   needsContainerFit,
   newWidgetId,
@@ -36,6 +38,9 @@ const MIN_CANVAS_WIDTH = 320;
 
 /** Breathing room between the canvas and the panels on either side. */
 const CANVAS_GUTTER = 10;
+
+/** Keeps the page off the editor chrome so a widget at y=0 is not under the header. */
+const CANVAS_TOP_GUTTER = 28;
 
 /**
  * The application editor.
@@ -300,8 +305,58 @@ function EditorBody({
     setFitVersion((version) => version + 1);
   }, [history, currentPageId]);
 
+  /* --- DSL mutations ---------------------------------------------- */
+
+  const updatePage = useCallback(
+    (mutate: (page: PageDsl) => void, label?: string) => {
+      history.update((draft) => {
+        const target = draft.pages.find((candidate) => candidate.id === currentPageId);
+        if (target) mutate(target);
+      }, label);
+    },
+    [history, currentPageId],
+  );
+
+  const deleteWidget = useCallback(
+    (widgetId: string) => {
+      updatePage((target) => {
+        removeWidget(target.widgets, widgetId);
+      }, `delete-widget:${widgetId}`);
+
+      // Deleting a container also deletes its descendants. Clear the selection
+      // when it points at either the removed widget or anything nested inside it.
+      setSelectedWidgetId((selectedId) => {
+        if (!selectedId) return null;
+        const removed = page ? findWidget(page.widgets, widgetId) : undefined;
+        const selectedWasRemoved =
+          selectedId === widgetId ||
+          Boolean(removed && findWidget(removed.children ?? [], selectedId));
+        return selectedWasRemoved ? null : selectedId;
+      });
+    },
+    [page, updatePage],
+  );
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target;
+      const isEditing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+
+      if (
+        !isPreview &&
+        !isEditing &&
+        selectedWidgetId &&
+        (event.key === 'Delete' || event.key === 'Backspace')
+      ) {
+        event.preventDefault();
+        deleteWidget(selectedWidgetId);
+        return;
+      }
+
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key === 'z' && !event.shiftKey) {
         event.preventDefault();
@@ -316,19 +371,7 @@ function EditorBody({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [history, save]);
-
-  /* --- DSL mutations ---------------------------------------------- */
-
-  const updatePage = useCallback(
-    (mutate: (page: PageDsl) => void, label?: string) => {
-      history.update((draft) => {
-        const target = draft.pages.find((candidate) => candidate.id === currentPageId);
-        if (target) mutate(target);
-      }, label);
-    },
-    [history, currentPageId],
-  );
+  }, [deleteWidget, history, isPreview, save, selectedWidgetId]);
 
   const addWidget = useCallback(
     (parentId: string | null, type: string, position: { x: number; y: number }) => {
@@ -353,7 +396,17 @@ function EditorBody({
           // widgets by bare name, so two `Table1`s would be ambiguous.
           name: uniqueWidgetName(definition.displayName.replace(/\s+/g, ''), target),
           type,
-          layout: { ...definition.defaultLayout, x: position.x, y: position.y },
+          layout: {
+            ...definition.defaultLayout,
+            x: position.x,
+            y: firstFreeRow(
+              siblings,
+              position.x,
+              position.y,
+              definition.defaultLayout.w,
+              definition.defaultLayout.h,
+            ),
+          },
           properties: defaultProperties(definition),
           ...(definition.isContainer ? { children: [] } : {}),
         };
@@ -410,18 +463,35 @@ function EditorBody({
 
   const applyLayout = useCallback(
     (parentId: string | null, layouts: Layout[]) => {
+      const siblings = page ? childListOf(page, parentId) : undefined;
+      if (!siblings) return;
+
+      const changed = layouts.some((entry) => {
+        if (entry.i === '__dropping__') return false;
+        const widget = siblings.find((candidate) => candidate.id === entry.i);
+        if (!widget) return false;
+        return (
+          widget.layout.x !== entry.x ||
+          widget.layout.y !== entry.y ||
+          widget.layout.w !== entry.w ||
+          widget.layout.h !== entry.h
+        );
+      });
+      if (!changed) return;
+
       updatePage((target) => {
-        const siblings = childListOf(target, parentId);
-        if (!siblings) return;
+        const nextSiblings = childListOf(target, parentId);
+        if (!nextSiblings) return;
         for (const entry of layouts) {
-          const widget = siblings.find((candidate) => candidate.id === entry.i);
+          if (entry.i === '__dropping__') continue;
+          const widget = nextSiblings.find((candidate) => candidate.id === entry.i);
           if (widget) {
             widget.layout = { ...widget.layout, x: entry.x, y: entry.y, w: entry.w, h: entry.h };
           }
         }
       }, `layout:${parentId ?? 'root'}`);
     },
-    [updatePage],
+    [page, updatePage],
   );
 
   const changeQuery = useCallback(
@@ -652,23 +722,36 @@ function EditorBody({
               onSelectWidget={setSelectedWidgetId}
               onAddWidget={(type) => {
                 /*
-                 * Dropped at the foot of the page rather than at the top, which
-                 * is where a dragged one usually lands and, more to the point,
-                 * is the one position that cannot displace anything already
-                 * placed. The grid settles it from there.
+                 * Into the selected container when that is a drop target — so a
+                 * Form (or Container) can be filled by clicking the palette,
+                 * not only by dragging onto its inner grid. Otherwise at the
+                 * foot of the page, which cannot displace anything already
+                 * placed.
                  */
+                const selected = selectedWidgetId
+                  ? findWidget(page?.widgets ?? [], selectedWidgetId)
+                  : undefined;
+                const selectedDef = selected ? getWidgetDefinition(selected.type) : undefined;
+                if (selected && selectedDef?.isContainer) {
+                  if (selectedDef.childLayout === 'cells') {
+                    addWidgetToContainer(selected.id, type);
+                    return;
+                  }
+                  const bottom = (selected.children ?? []).reduce(
+                    (lowest, widget) => Math.max(lowest, widget.layout.y + widget.layout.h),
+                    0,
+                  );
+                  addWidget(selected.id, type, { x: 0, y: bottom });
+                  return;
+                }
+
                 const bottom = (page?.widgets ?? []).reduce(
                   (lowest, widget) => Math.max(lowest, widget.layout.y + widget.layout.h),
                   0,
                 );
                 addWidget(null, type, { x: 0, y: bottom });
               }}
-              onDeleteWidget={(widgetId) => {
-                updatePage((target) => {
-                  removeWidget(target.widgets, widgetId);
-                }, 'delete-widget');
-                if (selectedWidgetId === widgetId) setSelectedWidgetId(null);
-              }}
+              onDeleteWidget={deleteWidget}
               onSelectQuery={(name) => {
                 setSelectedQueryName(name);
                 setBottomTab(name ? 'query' : null);
@@ -718,7 +801,21 @@ function EditorBody({
                * other.
                */
               className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-slate-100"
-              style={{ scrollbarGutter: 'stable', paddingInline: CANVAS_GUTTER }}
+              style={{
+                scrollbarGutter: 'stable',
+                paddingInline: CANVAS_GUTTER,
+                paddingTop: CANVAS_TOP_GUTTER,
+                paddingBottom: CANVAS_GUTTER,
+              }}
+              onClick={(event) => {
+                if (event.target === event.currentTarget) setSelectedWidgetId(null);
+              }}
+              onDragOver={(event) => acceptPaletteDrag(event)}
+              onDrop={(event) => {
+                const type = takePaletteDrop(event);
+                if (!type) return;
+                addWidget(dropParentId(event), type, { x: 0, y: 0 });
+              }}
             >
               {/* Left-aligned, not centred: the canvas starts where the panel ends
                   so the widget you are editing stays next to its properties, and
@@ -745,6 +842,7 @@ function EditorBody({
                       onDropWidget: addWidget,
                       onDropIntoContainer: addWidgetToContainer,
                       onUpdateProperties: updateWidgetProperties,
+                      onDelete: deleteWidget,
                     }}
                   />
                 )}
@@ -811,12 +909,7 @@ function EditorBody({
                     if (widget) widget.name = name;
                   }, 'rename')
                 }
-                onDelete={() => {
-                  updatePage((target) => {
-                    removeWidget(target.widgets, selectedWidgetId ?? '');
-                  }, 'delete-widget');
-                  setSelectedWidgetId(null);
-                }}
+                onDelete={() => selectedWidgetId && deleteWidget(selectedWidgetId)}
               />
             ) : (
               <PagePropertiesPanel

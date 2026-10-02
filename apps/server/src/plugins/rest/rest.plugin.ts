@@ -11,7 +11,7 @@ import type {
   PreparedQuery,
   QueryResult,
   TestResult,
-} from '@vinodapp/shared';
+} from '@swiftly/shared';
 import { assertUrlAllowed, type SsrfPolicy } from './ssrf-guard';
 
 const authSchema = z.discriminatedUnion('type', [

@@ -1,4 +1,4 @@
-import type { IdentifierAllowlistEntry } from '@vinodapp/shared';
+import type { IdentifierAllowlistEntry } from '@swiftly/shared';
 
 /**
  * Extracts `{{ expression }}` bindings from user-authored SQL and replaces them

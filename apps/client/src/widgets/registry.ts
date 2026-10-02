@@ -1,7 +1,8 @@
-import type { WidgetDefinition } from '@vinodapp/shared';
+import type { WidgetDefinition } from '@swiftly/shared';
 import type { RegisteredWidget } from './types';
 import { containerWidget, inputWidget } from './basic';
 import { buttonWidget } from './ButtonWidget';
+import { formWidget } from './FormWidget';
 import { textWidget } from './TextWidget';
 import { tableWidget } from './TableWidget';
 import { listWidget } from './ListWidget';
@@ -59,6 +60,7 @@ register(sliderWidget);
 
 // Buttons
 register(buttonWidget);
+register(formWidget);
 
 // Display
 register(textWidget);

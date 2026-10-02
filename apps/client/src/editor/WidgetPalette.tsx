@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import type { WidgetDefinition } from '@vinodapp/shared';
+import type { WidgetDefinition } from '@swiftly/shared';
 import { listWidgets } from '@/widgets/registry';
 import { THUMBNAILS, fallbackThumbnail } from '@/widgets/thumbnails';
+import { beginPaletteDrag, endPaletteDrag, notePaletteDrag, paletteDragMoved } from './paletteDrag';
 
 /**
  * The widget palette.
@@ -43,7 +44,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   custom: 'Custom components',
 };
 
-const DENSITY_KEY = 'vinodapp.palette.density';
+const DENSITY_KEY = 'swiftly.palette.density';
 
 type Density = 'list' | 'grid';
 
@@ -84,12 +85,15 @@ export function WidgetPalette({ onAdd }: { onAdd?: (widgetType: string) => void 
     draggable: true,
     unselectable: 'on' as const,
     onDragStart: (event: React.DragEvent) => {
-      event.dataTransfer.setData('widget/type', widget.type);
-      // react-grid-layout's droppable handling needs text/plain set.
-      event.dataTransfer.setData('text/plain', widget.type);
-      event.dataTransfer.effectAllowed = 'copy';
+      event.stopPropagation();
+      beginPaletteDrag(widget.type, event);
     },
-    onClick: () => onAdd?.(widget.type),
+    onDrag: () => notePaletteDrag(),
+    onDragEnd: () => endPaletteDrag(),
+    onClick: () => {
+      if (paletteDragMoved()) return;
+      onAdd?.(widget.type);
+    },
     title: onAdd ? `Drag onto the page, or click to add ${widget.displayName}` : widget.displayName,
   });
 
@@ -136,11 +140,12 @@ export function WidgetPalette({ onAdd }: { onAdd?: (widgetType: string) => void 
             {density === 'list' ? (
               <ul>
                 {group.items.map((widget) => (
-                  <li key={widget.type}>
-                    <div
-                      {...dragProps(widget)}
-                      className="group/item flex cursor-grab items-center gap-2 py-1 pr-2 pl-2.5 transition-colors hover:bg-blue-50 active:cursor-grabbing"
-                    >
+                  <li
+                    key={widget.type}
+                    {...dragProps(widget)}
+                    className="group/item cursor-grab list-none active:cursor-grabbing"
+                  >
+                    <div className="flex items-center gap-2 py-1 pr-2 pl-2.5 transition-colors group-hover/item:bg-blue-50">
                       <span className="flex h-4 w-6 shrink-0 items-center justify-center text-slate-400 [&>svg]:h-full [&>svg]:w-full">
                         {THUMBNAILS[widget.type] ?? fallbackThumbnail()}
                       </span>

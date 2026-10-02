@@ -1,10 +1,17 @@
+import { useEffect } from 'react';
 import clsx from 'clsx';
-import type { TabDisplayMode, ValidationRule } from '@vinodapp/shared';
+import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
 import { FieldLabel, LABEL_PROPERTIES } from './FieldLabel';
-import { textStyleProperties, textStyleToCss } from './textStyle';
-import { validate } from './validation';
+import { fieldControlStyle, textStyleProperties, textStyleToCss } from './textStyle';
+import {
+  clampToBounds,
+  fieldBounds,
+  mergeFieldRules,
+  showFieldError,
+  validate,
+} from './validation';
 
 /**
  * Numeric and date inputs.
@@ -23,11 +30,27 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
   // the palette with no default at all: you could not set one, and the canvas
   // showed an empty box whatever the panel said.
   const raw = useSeededValue(state, setState, properties.defaultValue, { isDesignMode });
-  const value = raw === undefined || raw === null ? '' : String(raw);
-  const rules = (properties.validation ?? []) as ValidationRule[];
+  const rules = mergeFieldRules(properties);
+  const bounds = fieldBounds(properties);
+  const constrained = clampToBounds(raw, properties);
+  const value = constrained === undefined || constrained === null ? '' : String(constrained);
   const touched = Boolean(state.touched);
   const result = validate(value, rules);
-  const showError = touched && !result.isValid;
+  const showError = showFieldError(result, { touched, value });
+
+  // Range min/max used to be HTML attributes only, which do not stop someone
+  // typing 6 into a field whose minimum is 10. Keep the stored value inside
+  // those bounds so the canvas, Form submit, and bindings all see the same number.
+  useEffect(() => {
+    if (constrained === raw) return;
+    setState({
+      value: constrained,
+      isValid: validate(constrained === undefined || constrained === null ? '' : String(constrained), rules)
+        .isValid,
+    });
+    // setState is recreated each render by the host; rules is rebuilt from properties.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [constrained, raw, bounds.min, bounds.max]);
 
   const prefix =
     properties.format === 'currency'
@@ -42,34 +65,49 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
         text={properties.label}
         icon={properties.labelIcon}
         display={properties.labelDisplay as TabDisplayMode | undefined}
+        required={rules.some((rule) => rule.kind === 'required')}
         style={textStyleToCss(properties, 'label')}
       />
 
-      <div className="relative flex-1">
+      <div className="relative min-h-0 flex-1">
         {prefix && (
-          <span className="absolute top-1/2 left-2 -translate-y-1/2 text-sm text-slate-400">
+          <span className="absolute top-1/2 left-2 -translate-y-1/2 text-slate-400" style={{ fontSize: fieldControlStyle(properties).fontSize }}>
             {prefix}
           </span>
         )}
         <input
           type="number"
           value={value}
-          style={textStyleToCss(properties, 'input')}
+          style={fieldControlStyle(properties, 'input')}
           step={Number(properties.step ?? 1)}
-          min={properties.min === undefined ? undefined : Number(properties.min)}
-          max={properties.max === undefined ? undefined : Number(properties.max)}
+          min={bounds.min}
+          max={bounds.max}
           placeholder={String(properties.placeholder ?? '')}
-          disabled={Boolean(properties.disabled) || isDesignMode}
+          disabled={Boolean(properties.disabled)}
           onChange={(event) => {
             // Empty stays undefined rather than becoming 0, so a cleared optional
             // field does not silently submit a value the user never typed.
             const next = event.target.value === '' ? undefined : Number(event.target.value);
-            setState({ value: next, isValid: validate(event.target.value, rules).isValid });
-            fireEvent('onChange', { value: next });
+            const clamped = clampToBounds(next, properties);
+            setState({
+              value: clamped,
+              isValid: validate(clamped === undefined || clamped === null ? '' : String(clamped), rules)
+                .isValid,
+            });
+            fireEvent('onChange', { value: clamped });
           }}
-          onBlur={() => setState({ touched: true })}
+          onBlur={() => {
+            const clamped = clampToBounds(raw, properties);
+            setState({
+              value: clamped,
+              touched: true,
+              isValid: validate(clamped === undefined || clamped === null ? '' : String(clamped), rules)
+                .isValid,
+            });
+            if (clamped !== raw) fireEvent('onChange', { value: clamped });
+          }}
           className={clsx(
-            'h-full w-full rounded border px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500/30',
+            'no-drag h-full w-full rounded border px-2 outline-none focus:ring-2 focus:ring-blue-500/30',
             prefix && 'pl-6',
             showError ? 'border-red-400' : 'border-slate-300 focus:border-blue-500',
             'disabled:bg-slate-50 disabled:text-slate-400',
@@ -90,7 +128,7 @@ export const numberInputWidget: RegisteredWidget = {
     category: 'input',
     icon: 'hash',
     defaultLayout: { x: 0, y: 0, w: 4, h: 2 },
-    minSize: { w: 2, h: 2 },
+    minSize: { w: 2, h: 1 },
     events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
     exposedState: [
       { key: 'value', type: 'number', description: 'Current number' },
@@ -118,8 +156,22 @@ export const numberInputWidget: RegisteredWidget = {
       {
         name: 'Range',
         properties: [
-          { key: 'min', label: 'Minimum', control: 'number', expectedType: 'number', bindable: true },
-          { key: 'max', label: 'Maximum', control: 'number', expectedType: 'number', bindable: true },
+          {
+            key: 'min',
+            label: 'Minimum',
+            control: 'number',
+            expectedType: 'number',
+            bindable: true,
+            helpText: 'Values below this are corrected as you type.',
+          },
+          {
+            key: 'max',
+            label: 'Maximum',
+            control: 'number',
+            expectedType: 'number',
+            bindable: true,
+            helpText: 'Values above this are corrected as you type.',
+          },
           { key: 'step', label: 'Step', control: 'number', expectedType: 'number', bindable: false, defaultValue: 1 },
         ],
       },
@@ -135,7 +187,7 @@ export const numberInputWidget: RegisteredWidget = {
       },
       {
         name: 'Field style',
-        properties: textStyleProperties('input'),
+        properties: textStyleProperties('input', { fontSize: 14 }),
       },
       {
         name: 'Behaviour',
@@ -155,10 +207,10 @@ export const numberInputWidget: RegisteredWidget = {
 function DatePickerWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
   const seeded = useSeededValue(state, setState, properties.defaultValue, { isDesignMode });
   const value = String(seeded ?? '');
-  const rules = (properties.validation ?? []) as ValidationRule[];
+  const rules = mergeFieldRules(properties);
   const touched = Boolean(state.touched);
   const result = validate(value, rules);
-  const showError = touched && !result.isValid;
+  const showError = showFieldError(result, { touched, value });
 
   return (
     <div className="flex h-full w-full flex-col gap-1">
@@ -172,18 +224,18 @@ function DatePickerWidget({ properties, state, setState, fireEvent, isDesignMode
 
       <input
         type={properties.includeTime ? 'datetime-local' : 'date'}
-        style={textStyleToCss(properties, 'input')}
+        style={fieldControlStyle(properties, 'input')}
         value={value}
         min={properties.minDate ? String(properties.minDate) : undefined}
         max={properties.maxDate ? String(properties.maxDate) : undefined}
-        disabled={Boolean(properties.disabled) || isDesignMode}
+        disabled={Boolean(properties.disabled)}
         onChange={(event) => {
           setState({ value: event.target.value, isValid: validate(event.target.value, rules).isValid });
           fireEvent('onChange', { value: event.target.value });
         }}
         onBlur={() => setState({ touched: true })}
         className={clsx(
-          'w-full flex-1 rounded border px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500/30',
+          'no-drag min-h-0 w-full flex-1 rounded border px-2 outline-none focus:ring-2 focus:ring-blue-500/30',
           showError ? 'border-red-400' : 'border-slate-300 focus:border-blue-500',
           'disabled:bg-slate-50 disabled:text-slate-400',
         )}
@@ -202,7 +254,7 @@ export const datePickerWidget: RegisteredWidget = {
     category: 'input',
     icon: 'calendar',
     defaultLayout: { x: 0, y: 0, w: 4, h: 2 },
-    minSize: { w: 2, h: 2 },
+    minSize: { w: 2, h: 1 },
     events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
     exposedState: [
       { key: 'value', type: 'string', description: 'ISO date, ready to bind into a query' },
@@ -236,7 +288,7 @@ export const datePickerWidget: RegisteredWidget = {
       },
       {
         name: 'Field style',
-        properties: textStyleProperties('input'),
+        properties: textStyleProperties('input', { fontSize: 14 }),
       },
       {
         name: 'Behaviour',
@@ -276,13 +328,13 @@ function SliderWidget({ properties, state, setState, fireEvent, isDesignMode }: 
         max={max}
         step={Number(properties.step ?? 1)}
         value={value}
-        disabled={Boolean(properties.disabled) || isDesignMode}
+        disabled={Boolean(properties.disabled)}
         onChange={(event) => {
           const next = Number(event.target.value);
           setState({ value: next });
           fireEvent('onChange', { value: next });
         }}
-        className="w-full accent-blue-600"
+        className="no-drag w-full accent-blue-600"
       />
 
       <div className="flex justify-between text-[10px] text-slate-400">

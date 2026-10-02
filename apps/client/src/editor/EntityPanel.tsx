@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import type { ApplicationDsl, PageDsl } from '@vinodapp/shared';
+import type { ApplicationDsl, PageDsl } from '@swiftly/shared';
 import type { DatasourceSummary } from '@/lib/api';
 import { WidgetPalette } from './WidgetPalette';
 import { WidgetTree } from './WidgetTree';

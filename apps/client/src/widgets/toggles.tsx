@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
-import type { TabDisplayMode } from '@vinodapp/shared';
+import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
 import { FieldLabel, labelProperties } from './FieldLabel';
@@ -145,13 +145,13 @@ function CheckboxWidget({ properties, state, setState, fireEvent, isDesignMode }
       <input
         type="checkbox"
         checked={checked}
-        disabled={Boolean(properties.disabled) || isDesignMode}
+        disabled={Boolean(properties.disabled)}
         onChange={(event) => {
           setState({ value: event.target.checked });
           fireEvent('onChange', { value: event.target.checked });
         }}
         style={{ accentColor: accentOf(properties) }}
-        className="h-4 w-4 shrink-0 accent-blue-600"
+        className="no-drag h-4 w-4 shrink-0 accent-blue-600"
       />
       {/* A span, not a label: this row is already one, and the caption is the
           control's name through it. */}
@@ -198,7 +198,7 @@ export const checkboxWidget: RegisteredWidget = {
 function SwitchWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
   const seeded = useSeededValue(state, setState, properties.defaultChecked, { isDesignMode });
   const checked = Boolean(seeded);
-  const disabled = Boolean(properties.disabled) || isDesignMode;
+  const disabled = Boolean(properties.disabled);
 
   return (
     <div className="flex h-full w-full items-center gap-2">
@@ -213,7 +213,7 @@ function SwitchWidget({ properties, state, setState, fireEvent, isDesignMode }: 
         }}
         style={checked ? { background: accentOf(properties) } : undefined}
         className={clsx(
-          'relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50',
+          'no-drag relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50',
           checked ? 'bg-blue-600' : 'bg-slate-300',
         )}
       >
@@ -289,13 +289,13 @@ function RadioGroupWidget({ widget, properties, state, setState, fireEvent, isDe
               // fight over the same browser-level name.
               name={widget.name}
               checked={option.value === selected}
-              disabled={Boolean(properties.disabled) || isDesignMode}
+              disabled={Boolean(properties.disabled)}
               onChange={() => {
                 setState({ value: option.value, selectedLabel: option.label });
                 fireEvent('onChange', { value: option.value });
               }}
               style={{ accentColor: accentOf(properties) }}
-              className="h-4 w-4 accent-blue-600"
+              className="no-drag h-4 w-4 accent-blue-600"
             />
             <span className="truncate text-sm text-slate-700" style={optionStyle}>
               {option.label}
@@ -345,7 +345,7 @@ export const radioGroupWidget: RegisteredWidget = {
  * Checkbox group
  * ------------------------------------------------------------------ */
 
-function CheckboxGroupWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
+function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetProps) {
   const options = useMemo(() => normaliseOptions(properties), [properties]);
   const selected = Array.isArray(state.value) ? (state.value as unknown[]) : [];
   const horizontal = properties.direction === 'horizontal';
@@ -375,10 +375,10 @@ function CheckboxGroupWidget({ properties, state, setState, fireEvent, isDesignM
             <input
               type="checkbox"
               checked={selected.includes(option.value)}
-              disabled={Boolean(properties.disabled) || isDesignMode}
+              disabled={Boolean(properties.disabled)}
               onChange={() => toggle(option.value)}
               style={{ accentColor: accentOf(properties) }}
-              className="h-4 w-4 accent-blue-600"
+              className="no-drag h-4 w-4 accent-blue-600"
             />
             <span className="truncate text-sm text-slate-700" style={optionStyle}>
               {option.label}

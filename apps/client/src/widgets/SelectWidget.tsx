@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import clsx from 'clsx';
-import type { TabDisplayMode } from '@vinodapp/shared';
+import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { FieldLabel, LABEL_PROPERTIES } from './FieldLabel';
-import { textStyleProperties, textStyleToCss } from './textStyle';
+import { fieldControlStyle, textStyleProperties, textStyleToCss } from './textStyle';
 import { asArray } from './coerce';
 
 /**
@@ -22,7 +22,7 @@ interface Option {
 
 const OPTION_HEIGHT = 30;
 
-function SelectWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
+function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
@@ -50,7 +50,7 @@ function SelectWidget({ properties, state, setState, fireEvent, isDesignMode }: 
    * control and on every row of the list. A dropdown whose options are set
    * differently from the thing they land in reads as two controls.
    */
-  const valueStyle = textStyleToCss(properties, 'value');
+  const valueStyle = fieldControlStyle(properties, 'value');
 
   return (
     <div className="flex h-full w-full flex-col gap-1">
@@ -61,19 +61,19 @@ function SelectWidget({ properties, state, setState, fireEvent, isDesignMode }: 
         style={textStyleToCss(properties, 'label')}
       />
 
-      <div className="relative flex-1">
+      <div className="relative min-h-0 flex-1">
         <button
           type="button"
-          disabled={Boolean(properties.disabled) || isDesignMode}
+          disabled={Boolean(properties.disabled)}
           onClick={() => setOpen((previous) => !previous)}
+          style={valueStyle}
           className={clsx(
-            'flex h-full w-full items-center justify-between rounded border border-slate-300 bg-white px-2 text-left text-sm',
+            'no-drag flex h-full w-full items-center justify-between rounded border border-slate-300 bg-white px-2 text-left',
             'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 focus:outline-none',
             'disabled:bg-slate-50 disabled:text-slate-400',
           )}
         >
           <span
-            style={selected ? valueStyle : undefined}
             className={clsx('truncate', !selected && 'text-slate-400')}
           >
             {selected ? selected.label : placeholder}
@@ -81,14 +81,14 @@ function SelectWidget({ properties, state, setState, fireEvent, isDesignMode }: 
           <span className="ml-2 shrink-0 text-slate-400">▾</span>
         </button>
 
-        {open && !isDesignMode && (
+        {open && (
           <div className="absolute top-full left-0 z-50 mt-1 w-full rounded border border-slate-200 bg-white shadow-lg">
             <input
               autoFocus
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search"
-              className="w-full border-b border-slate-200 px-2 py-1.5 text-sm outline-none"
+              className="no-drag w-full border-b border-slate-200 px-2 py-1.5 text-sm outline-none"
             />
             <div ref={listRef} className="max-h-56 overflow-auto">
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
@@ -168,7 +168,7 @@ export const selectWidget: RegisteredWidget = {
     category: 'input',
     icon: 'chevron-down',
     defaultLayout: { x: 0, y: 0, w: 4, h: 2 },
-    minSize: { w: 2, h: 2 },
+    minSize: { w: 2, h: 1 },
     events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
     exposedState: [
       { key: 'value', type: 'string', description: 'Selected value' },
@@ -203,7 +203,7 @@ export const selectWidget: RegisteredWidget = {
       },
       {
         name: 'Value style',
-        properties: textStyleProperties('value'),
+        properties: textStyleProperties('value', { fontSize: 14 }),
       },
       {
         name: 'Behaviour',

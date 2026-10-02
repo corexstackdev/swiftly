@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import type { PropertyDefinition, TabDisplayMode } from '@vinodapp/shared';
+import type { PropertyDefinition, TabDisplayMode } from '@swiftly/shared';
 
 /**
  * The label above a form field.

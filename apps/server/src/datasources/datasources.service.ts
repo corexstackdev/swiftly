@@ -1,12 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { DbSchema, TestResult } from '@vinodapp/shared';
+import type { DbSchema, TestResult } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PluginRegistry } from '../plugins/plugin.registry';
 import { AuditService } from '../audit/audit.service';
 
 /** Sent back to the client in place of a stored secret. */
-export const SECRET_PLACEHOLDER = '__vinodapp_unchanged__';
+export const SECRET_PLACEHOLDER = '__swiftly_unchanged__';
 
 export interface UpsertDatasourceInput {
   name: string;

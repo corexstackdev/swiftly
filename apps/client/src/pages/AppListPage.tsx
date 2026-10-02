@@ -26,7 +26,7 @@ type ViewMode = 'grid' | 'list';
 type SortKey = 'updated' | 'name' | 'name-desc';
 type StatusFilter = 'all' | 'published' | 'draft' | 'archived';
 
-const VIEW_STORAGE_KEY = 'vinodapp.apps.view';
+const VIEW_STORAGE_KEY = 'swiftly.apps.view';
 
 /*
  * Shared by the cards and by the placeholders that stand in for them, so the two

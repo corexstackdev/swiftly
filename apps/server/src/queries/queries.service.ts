@@ -13,7 +13,7 @@ import type {
   ExecutionContext as PluginExecutionContext,
   QueryEntity,
   QueryResult,
-} from '@vinodapp/shared';
+} from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PluginRegistry } from '../plugins/plugin.registry';
 import { DatasourcesService } from '../datasources/datasources.service';

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import clsx from 'clsx';
-import type { PageDsl, WidgetDsl } from '@vinodapp/shared';
+import type { PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getWidgetDefinition } from '@/widgets/registry';
 
 /**
@@ -138,7 +138,10 @@ function TreeLevel({
                 type="button"
                 onClick={() => onDelete(widget.id)}
                 aria-label={`Delete ${widget.name}`}
-                className="rounded px-1 text-xs text-slate-400 opacity-0 group-hover/node:opacity-100 hover:bg-red-100 hover:text-red-600"
+                className={clsx(
+                  'rounded px-1 text-xs text-slate-400 hover:bg-red-100 hover:text-red-600',
+                  isSelected ? 'opacity-100' : 'opacity-0 group-hover/node:opacity-100',
+                )}
               >
                 ×
               </button>

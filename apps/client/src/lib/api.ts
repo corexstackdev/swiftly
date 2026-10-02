@@ -1,4 +1,4 @@
-import type { ApplicationDsl, DbSchema, QueryResult, TestResult } from '@vinodapp/shared';
+import type { ApplicationDsl, DbSchema, QueryResult, TestResult } from '@swiftly/shared';
 
 /**
  * API client.
@@ -144,7 +144,7 @@ export interface PluginInfo {
 }
 
 /** Sent in place of a stored secret the user did not retype. */
-export const SECRET_PLACEHOLDER = '__vinodapp_unchanged__';
+export const SECRET_PLACEHOLDER = '__swiftly_unchanged__';
 
 export interface VersionSummary {
   id: string;

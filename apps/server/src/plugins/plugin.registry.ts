@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { DatasourcePlugin } from '@vinodapp/shared';
+import type { DatasourcePlugin } from '@swiftly/shared';
 import { PostgresPlugin } from './postgres/postgres.plugin';
 import { MysqlPlugin } from './mysql/mysql.plugin';
 import { RestPlugin } from './rest/rest.plugin';

@@ -1,4 +1,4 @@
-import type { ActionDsl, WidgetDefinition, WidgetDsl } from '@vinodapp/shared';
+import type { ActionDsl, WidgetDefinition, WidgetDsl } from '@swiftly/shared';
 import type { ComponentType } from 'react';
 
 /** Props every widget receives. Identical in the editor and the published runtime. */
@@ -49,6 +49,13 @@ export interface WidgetHost {
     widgetType: string,
     seedProperties?: Record<string, unknown>,
   ) => void;
+  /**
+   * Exposed state of every widget on the page. A Form reads its children's
+   * values from here so `{{ Form1.data.Input1 }}` stays in lockstep with typing.
+   */
+  widgetState?: Record<string, Record<string, unknown>>;
+  setWidgetState?: (widgetName: string, patch: Record<string, unknown>) => void;
+  propertiesOf?: (widgetName: string) => Record<string, unknown>;
 }
 
 export interface RegisteredWidget {

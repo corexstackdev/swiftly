@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import type { ApplicationDsl } from '@vinodapp/shared';
+import type { ApplicationDsl } from '@swiftly/shared';
 
 /**
  * Undo/redo over the application DSL.

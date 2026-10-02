@@ -1,4 +1,4 @@
-import type { PropertyDefinition } from '@vinodapp/shared';
+import type { PropertyDefinition } from '@swiftly/shared';
 
 /**
  * Typography properties, and the CSS they produce.
@@ -36,7 +36,10 @@ const WEIGHTS: Record<string, string> = {
  * 'input' gives `inputFontSize` — so one widget can style several parts of
  * itself without its property keys colliding.
  */
-export function textStyleProperties(prefix: string): PropertyDefinition[] {
+export function textStyleProperties(
+  prefix: string,
+  defaults: { fontSize?: number } = {},
+): PropertyDefinition[] {
   const key = (name: string): string => `${prefix}${name}`;
 
   return [
@@ -60,7 +63,11 @@ export function textStyleProperties(prefix: string): PropertyDefinition[] {
       control: 'number',
       expectedType: 'number',
       bindable: false,
-      helpText: 'Pixels. Blank follows the theme.',
+      defaultValue: defaults.fontSize,
+      helpText:
+        defaults.fontSize !== undefined
+          ? 'Pixels. Sets the font and a minimum field height; drag the widget to grow or shrink it.'
+          : 'Pixels. Blank follows the theme.',
     },
     {
       key: key('FontWeight'),
@@ -130,5 +137,31 @@ export function textStyleToCss(
     ...(typeof colour === 'string' && colour !== '' ? { color: colour } : {}),
     ...(read('Italic') ? { fontStyle: 'italic' as const } : {}),
     ...(decorations.length > 0 ? { textDecoration: decorations.join(' ') } : {}),
+  };
+}
+
+const DEFAULT_FIELD_FONT = 14;
+
+/** Font size from the panel, or the compact default a field uses when Size is blank. */
+export function fieldFontSize(properties: Record<string, unknown>, prefix = 'input'): number {
+  const size = Number(properties[`${prefix}FontSize`]);
+  return Number.isFinite(size) && size > 0 ? size : DEFAULT_FIELD_FONT;
+}
+
+/**
+ * Typography plus a floor height from Size. The field still fills its widget
+ * box so dragging a handle to grow or shrink the control is visible.
+ */
+export function fieldControlStyle(
+  properties: Record<string, unknown>,
+  prefix = 'input',
+): React.CSSProperties {
+  const fontSize = fieldFontSize(properties, prefix);
+  return {
+    ...textStyleToCss(properties, prefix),
+    fontSize,
+    minHeight: Math.max(28, fontSize + 16),
+    lineHeight: `${fontSize}px`,
+    boxSizing: 'border-box',
   };
 }

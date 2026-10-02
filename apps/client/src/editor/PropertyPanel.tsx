@@ -5,7 +5,7 @@ import type {
   PropertyDefinition,
   ValidationRule,
   WidgetDsl,
-} from '@vinodapp/shared';
+} from '@swiftly/shared';
 import { getWidgetDefinition } from '@/widgets/registry';
 import { TabListEditor, normaliseTabs } from './TabListEditor';
 import { SpacingEditor } from './SpacingEditor';
@@ -147,14 +147,6 @@ function PropertyPanelBody({
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
             {definition.displayName}
           </span>
-          <button
-            type="button"
-            onClick={onDelete}
-            title={`Delete ${widget.name}`}
-            className="ml-auto rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
-          >
-            Delete
-          </button>
         </div>
 
         <input
@@ -167,6 +159,24 @@ function PropertyPanelBody({
         <p className="mt-1.5 text-[11px] text-slate-400">
           Bind to it as <code className="text-slate-500">{widget.name}.property</code>
         </p>
+
+        <button
+          type="button"
+          onClick={onDelete}
+          title={`Delete ${widget.name}`}
+          className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M3 4.5h10M6 4.5V3h4v1.5M5 6.5v6m3-6v6m3-6v6M4.5 4.5l.5 9h6l.5-9"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Delete widget
+        </button>
       </div>
 
       {/* A Table or a Chart carries more properties than fit on a screen, so past
@@ -604,10 +614,20 @@ function ValidationEditor({
 
           {NEEDS_VALUE.has(rule.kind) && (
             <input
+              type={rule.kind === 'min' || rule.kind === 'max' || rule.kind === 'minLength' || rule.kind === 'maxLength' ? 'number' : 'text'}
               value={rule.value ?? ''}
               onChange={(event) => {
                 const next = [...rules];
-                next[index] = { ...rule, value: event.target.value };
+                const raw = event.target.value;
+                next[index] = {
+                  ...rule,
+                  value:
+                    event.target.type === 'number'
+                      ? raw === ''
+                        ? ''
+                        : Number(raw)
+                      : raw,
+                };
                 onChange(next);
               }}
               placeholder="value"

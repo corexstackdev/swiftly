@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import type { ApplicationDsl, PageDsl } from '@vinodapp/shared';
+import type { ApplicationDsl, PageDsl } from '@swiftly/shared';
 
 /**
  * Shown when no widget is selected.

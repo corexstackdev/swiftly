@@ -1,4 +1,4 @@
-import type { WidgetDsl } from '@vinodapp/shared';
+import type { WidgetDsl } from '@swiftly/shared';
 import { getWidget } from '@/widgets/registry';
 import type { AppRuntime } from './useAppRuntime';
 
@@ -16,6 +16,9 @@ export function runtimeHost(runtime: AppRuntime) {
     openModals: runtime.openModals,
     openModal: runtime.openModal,
     closeModal: runtime.closeModal,
+    widgetState: runtime.widgetState,
+    setWidgetState: runtime.setWidgetState,
+    propertiesOf: runtime.properties,
   };
 }
 

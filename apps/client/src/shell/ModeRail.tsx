@@ -15,7 +15,7 @@ export function ModeRail({ applicationId }: { applicationId: string }) {
   return (
     <nav className="flex w-14 shrink-0 flex-col items-center gap-1 border-r border-slate-200 bg-white py-2">
       <div className="mb-2 flex h-8 w-8 items-center justify-center rounded border-2 border-orange-500 font-mono text-sm font-bold text-slate-900">
-        a
+        S
       </div>
 
       <RailLink to={`/apps/${applicationId}/edit`} label="Editor">

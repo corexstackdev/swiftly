@@ -1,4 +1,4 @@
-import type { ValidationRule } from '@vinodapp/shared';
+import type { ValidationRule } from '@swiftly/shared';
 
 /**
  * Declarative validation, evaluated client-side for inline feedback.
@@ -42,9 +42,11 @@ function check(value: unknown, rule: ValidationRule): string | null {
       return text.length > Number(expected) ? `Must be at most ${expected} characters` : null;
 
     case 'min':
+      if (text.trim() === '') return null;
       return Number(text) < Number(expected) ? `Must be at least ${expected}` : null;
 
     case 'max':
+      if (text.trim() === '') return null;
       return Number(text) > Number(expected) ? `Must be at most ${expected}` : null;
 
     case 'numeric':
@@ -97,4 +99,65 @@ function check(value: unknown, rule: ValidationRule): string | null {
 
 function truthy(value: unknown): boolean {
   return value !== false && value !== 'false' && value !== '' && value !== null && value !== undefined && value !== 0;
+}
+
+/** A finite number from a property or a rule, or undefined when unset. */
+export function numberBound(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const next = Number(value);
+  return Number.isFinite(next) ? next : undefined;
+}
+
+/**
+ * Validation rules plus the Range min/max on Number Input.
+ *
+ * Those bounds used to live only as HTML attributes, which do not stop someone
+ * typing 6 into a field whose minimum is 10. Folding them into the same rules
+ * the rest of the form already reads is what makes Submit and the red message
+ * agree with the panel.
+ */
+export function mergeFieldRules(properties: Record<string, unknown>): ValidationRule[] {
+  const rules = [...((properties.validation as ValidationRule[] | undefined) ?? [])];
+  const min = numberBound(properties.min);
+  const max = numberBound(properties.max);
+  if (min !== undefined && !rules.some((rule) => rule.kind === 'min')) {
+    rules.push({ kind: 'min', value: min, message: `Must be at least ${min}` });
+  }
+  if (max !== undefined && !rules.some((rule) => rule.kind === 'max')) {
+    rules.push({ kind: 'max', value: max, message: `Must be at most ${max}` });
+  }
+  return rules;
+}
+
+export function fieldBounds(properties: Record<string, unknown>): { min?: number; max?: number } {
+  let min = numberBound(properties.min);
+  let max = numberBound(properties.max);
+  for (const rule of (properties.validation as ValidationRule[] | undefined) ?? []) {
+    if (rule.kind === 'min' && min === undefined) min = numberBound(rule.value);
+    if (rule.kind === 'max' && max === undefined) max = numberBound(rule.value);
+  }
+  return { min, max };
+}
+
+/** Clamp a number onto the field's min/max. Used on blur so typing 16 is still possible. */
+export function clampToBounds(value: unknown, properties: Record<string, unknown>): unknown {
+  if (value === undefined || value === null || value === '') return value;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  const { min, max } = fieldBounds(properties);
+  let next = number;
+  if (min !== undefined && next < min) next = min;
+  if (max !== undefined && next > max) next = max;
+  return next;
+}
+
+/** Required waits for blur; range and format errors show as soon as there is a value. */
+export function showFieldError(
+  outcome: ValidationOutcome,
+  options: { touched: boolean; value: unknown },
+): boolean {
+  if (outcome.isValid) return false;
+  if (options.touched) return true;
+  const text = options.value == null ? '' : String(options.value);
+  return text.trim() !== '';
 }

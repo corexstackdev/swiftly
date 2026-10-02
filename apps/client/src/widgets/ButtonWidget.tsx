@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import type { TabDisplayMode } from '@vinodapp/shared';
+import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { textStyleProperties, textStyleToCss } from './textStyle';
 import { stateStyleProperties, stateStyleToCss } from './stateStyle';

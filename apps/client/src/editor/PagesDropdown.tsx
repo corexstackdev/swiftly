@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { ApplicationDsl } from '@vinodapp/shared';
+import type { ApplicationDsl } from '@swiftly/shared';
 
 /**
  * Page switcher, and everything else a page needs doing.

@@ -1,12 +1,12 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
-import type { TabDisplayMode, ValidationRule } from '@vinodapp/shared';
+import type { TabDisplayMode, ValidationRule } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
 import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';
 import { FieldLabel, LABEL_PROPERTIES } from './FieldLabel';
-import { textStyleProperties, textStyleToCss } from './textStyle';
-import { validate } from './validation';
+import { fieldControlStyle, textStyleProperties, textStyleToCss } from './textStyle';
+import { mergeFieldRules, showFieldError, validate } from './validation';
 
 /* ------------------------------------------------------------------ *
  * Input
@@ -15,11 +15,11 @@ import { validate } from './validation';
 function InputWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
   const seeded = useSeededValue(state, setState, properties.defaultValue, { isDesignMode });
   const value = String(seeded ?? '');
-  const rules = (properties.validation ?? []) as ValidationRule[];
+  const rules = mergeFieldRules(properties);
   const touched = Boolean(state.touched);
 
   const result = useMemo(() => validate(value, rules), [value, rules]);
-  const showError = touched && !result.isValid;
+  const showError = showFieldError(result, { touched, value });
 
   return (
     <div className="flex h-full w-full flex-col gap-1">
@@ -33,9 +33,9 @@ function InputWidget({ properties, state, setState, fireEvent, isDesignMode }: W
       <input
         type={String(properties.inputType ?? 'text')}
         value={value}
-        style={textStyleToCss(properties, 'input')}
+        style={fieldControlStyle(properties, 'input')}
         placeholder={String(properties.placeholder ?? '')}
-        disabled={Boolean(properties.disabled) || isDesignMode}
+        disabled={Boolean(properties.disabled)}
         onChange={(event) => {
           // `isValid` is written alongside the value so a submit button can bind
           // `{{ !EmailInput.isValid }}` to its disabled property.
@@ -45,7 +45,7 @@ function InputWidget({ properties, state, setState, fireEvent, isDesignMode }: W
         }}
         onBlur={() => setState({ touched: true })}
         className={clsx(
-          'w-full flex-1 rounded border px-2 py-1 text-sm outline-none',
+          'no-drag min-h-0 w-full flex-1 rounded border px-2 outline-none',
           'focus:ring-2 focus:ring-blue-500/30',
           showError ? 'border-red-400 focus:border-red-500' : 'border-slate-300 focus:border-blue-500',
           'disabled:bg-slate-50 disabled:text-slate-400',
@@ -64,7 +64,7 @@ export const inputWidget: RegisteredWidget = {
     category: 'input',
     icon: 'text-cursor',
     defaultLayout: { x: 0, y: 0, w: 4, h: 2 },
-    minSize: { w: 2, h: 2 },
+    minSize: { w: 2, h: 1 },
     events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
     exposedState: [
       { key: 'value', type: 'string', description: 'Current text' },
@@ -93,7 +93,7 @@ export const inputWidget: RegisteredWidget = {
       },
       {
         name: 'Field style',
-        properties: textStyleProperties('input'),
+        properties: textStyleProperties('input', { fontSize: 14 }),
       },
       {
         name: 'Behaviour',
@@ -110,14 +110,15 @@ export const inputWidget: RegisteredWidget = {
  * Container
  * ------------------------------------------------------------------ */
 
-function ContainerWidget({ properties, renderChildren }: WidgetProps) {
+function ContainerWidget({ properties, renderChildren, isDesignMode }: WidgetProps) {
   return (
     <div
       className={clsx(
         // A column layout rather than `h-full` on the body: with a title, a
         // full-height body overflows by exactly the title's height, which is how
         // the last row of children ends up behind a scrollbar.
-        'flex h-full w-full flex-col overflow-hidden',
+        'flex h-full w-full flex-col',
+        isDesignMode ? 'overflow-visible' : 'overflow-hidden',
         properties.bordered !== false && 'rounded border border-slate-200',
       )}
       style={{ background: String(properties.background ?? '#ffffff') }}

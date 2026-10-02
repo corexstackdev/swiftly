@@ -1,5 +1,5 @@
 {
-  "name": "vinodapp",
+  "name": "swiftly",
   "private": true,
   "version": "0.1.0",
   "description": "Enterprise low-code application platform",
@@ -15,8 +15,8 @@
     "test": "turbo run test",
     "db:up": "docker compose up -d postgres redis",
     "db:down": "docker compose down",
-    "db:migrate": "pnpm --filter @vinodapp/server prisma migrate dev",
-    "db:studio": "pnpm --filter @vinodapp/server prisma studio"
+    "db:migrate": "pnpm --filter @swiftly/server prisma migrate dev",
+    "db:studio": "pnpm --filter @swiftly/server prisma studio"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

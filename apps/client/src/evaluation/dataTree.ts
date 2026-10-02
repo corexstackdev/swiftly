@@ -1,4 +1,4 @@
-import type { ApplicationDsl, PageDsl, QueryEntity, QueryResult, WidgetDsl } from '@vinodapp/shared';
+import type { ApplicationDsl, PageDsl, QueryEntity, QueryResult, WidgetDsl } from '@swiftly/shared';
 import { getWidgetDefinition } from '@/widgets/registry';
 
 /**

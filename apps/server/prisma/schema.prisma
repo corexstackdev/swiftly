@@ -345,7 +345,7 @@ model CustomComponent {
   /// Registered as 'custom:{name}'.
   name           String
   version        String
-  /// CustomComponentManifest from @vinodapp/shared.
+  /// CustomComponentManifest from @swiftly/shared.
   manifest       Json
   /// Storage key of the uploaded ESM bundle.
   bundlePath     String

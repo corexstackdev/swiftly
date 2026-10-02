@@ -7,13 +7,31 @@ import { createHash } from 'node:crypto';
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   readonly client: Redis;
+  private warnedOffline = false;
 
   constructor(config: ConfigService) {
-    this.client = new Redis(config.getOrThrow<string>('REDIS_URL'), {
+    const url = config.getOrThrow<string>('REDIS_URL');
+    this.client = new Redis(url, {
       maxRetriesPerRequest: 3,
       lazyConnect: false,
+      // ioredis otherwise retries forever and emits `error` on every attempt,
+      // which filled the terminal when the local container was stopped.
+      retryStrategy: (times) => Math.min(times * 200, 5_000),
     });
-    this.client.on('error', (error) => this.logger.warn(`Redis error: ${error.message}`));
+    this.client.on('error', (error) => {
+      if (this.warnedOffline) return;
+      this.warnedOffline = true;
+      const detail = error.message || (error as NodeJS.ErrnoException).code || 'connection failed';
+      this.logger.warn(
+        `Redis is unreachable (${detail}). Query cache is disabled until it comes back. Start it with: docker compose up -d redis`,
+      );
+    });
+    this.client.on('ready', () => {
+      if (this.warnedOffline) {
+        this.logger.log('Redis connected');
+      }
+      this.warnedOffline = false;
+    });
   }
 
   async onModuleDestroy(): Promise<void> {

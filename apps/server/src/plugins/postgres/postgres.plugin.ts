@@ -14,7 +14,7 @@ import type {
   QueryResult,
   RoutineMetadata,
   TestResult,
-} from '@vinodapp/shared';
+} from '@swiftly/shared';
 import { compile, resolveParameters, type CompiledStatement } from '../sql/compiler';
 import { applyIdentifierBindings } from '../sql-binding';
 

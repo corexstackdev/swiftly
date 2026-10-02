@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { ApplicationDsl } from '@vinodapp/shared';
+import type { ApplicationDsl } from '@swiftly/shared';
 import { api, type Environment } from '@/lib/api';
 import { useSession } from '@/lib/session';
 import { useAppRuntime } from '@/runtime/useAppRuntime';

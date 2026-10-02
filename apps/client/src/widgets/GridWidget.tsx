@@ -1,8 +1,9 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { WidgetDsl } from '@vinodapp/shared';
+import type { WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { spacingToCss } from '@/editor/SpacingEditor';
+import { acceptPaletteDrag, peekPaletteType, takePaletteDrop } from '@/editor/paletteDrag';
 
 /**
  * Grid — a container whose children occupy cells rather than coordinates.
@@ -108,7 +109,7 @@ function GridWidget({ properties, children = [], renderChild, isDesignMode, host
 
   const rowMode = String(properties.rowMode ?? 'auto');
   const rows = Math.max(1, Number(properties.rows ?? 2));
-  const minRowHeight = Number(properties.minRowHeight ?? 80);
+  const minRowHeight = Number(properties.minRowHeight ?? 36);
 
   const gridStyle: React.CSSProperties = {
     display: 'grid',
@@ -168,13 +169,14 @@ function GridWidget({ properties, children = [], renderChild, isDesignMode, host
       ref={ref}
       style={containerStyle}
       className={clsx(
-        'h-full w-full overflow-auto',
+        'h-full w-full',
+        isDesignMode ? 'overflow-visible' : 'overflow-auto',
         isDropTarget && 'outline-2 outline-offset-[-2px] outline-blue-500',
       )}
       onDragOver={
         canDrop
           ? (event) => {
-              event.preventDefault();
+              if (!acceptPaletteDrag(event)) return;
               event.stopPropagation();
               setIsDropTarget(true);
             }
@@ -184,12 +186,8 @@ function GridWidget({ properties, children = [], renderChild, isDesignMode, host
       onDrop={
         canDrop
           ? (event) => {
-              event.preventDefault();
-              // Without this the canvas grid underneath also takes the drop and
-              // the widget is added twice, once in each parent.
-              event.stopPropagation();
+              const type = takePaletteDrop(event) ?? peekPaletteType();
               setIsDropTarget(false);
-              const type = event.dataTransfer.getData('widget/type');
               if (type) host.dropIntoContainer?.(widget.id, type, { colSpan: 1, rowSpan: 1 });
             }
           : undefined
@@ -200,7 +198,10 @@ function GridWidget({ properties, children = [], renderChild, isDesignMode, host
           <div
             key={child.id}
             style={cellStyle(child, effectiveColumns)}
-            className={clsx('min-w-0', showGuides && 'rounded-sm outline-1 outline-dashed outline-slate-300')}
+            className={clsx(
+              'min-w-0 h-full min-h-0',
+              showGuides && 'rounded-sm outline-1 outline-dashed outline-slate-300',
+            )}
           >
             {renderChild?.(child)}
           </div>
@@ -311,7 +312,8 @@ export const gridWidget: RegisteredWidget = {
             control: 'number',
             expectedType: 'number',
             bindable: false,
-            defaultValue: 80,
+            defaultValue: 36,
+            helpText: 'Floor for each row in pixels. Lower this to shrink fields by dragging.',
           },
           {
             key: 'showGuides',

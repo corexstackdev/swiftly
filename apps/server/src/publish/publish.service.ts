@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { VersionStatus } from '../common/status';
-import type { ApplicationDsl } from '@vinodapp/shared';
+import type { ApplicationDsl } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PERMISSIONS, type Permission } from '../common/permissions';

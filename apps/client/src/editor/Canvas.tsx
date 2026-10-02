@@ -1,11 +1,12 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import type { PageDsl, WidgetDsl } from '@vinodapp/shared';
+import type { PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getWidget, getWidgetDefinition } from '@/widgets/registry';
 import { requiredContainerHeight } from './widgetOps';
 import { GRID_COLUMNS, GRID_ROW_HEIGHT, GRID_GAP, runtimeHost } from '@/runtime/PageRenderer';
 import { GridChildResizer } from './GridChildResizer';
+import { acceptPaletteDrag, dropParentId, takePaletteDrop } from './paletteDrag';
 import type { AppRuntime } from '@/runtime/useAppRuntime';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
@@ -38,12 +39,20 @@ export interface CanvasHandlers {
   ) => void;
   /** Writes properties onto a widget, for direct manipulation such as a cell resize. */
   onUpdateProperties: (widgetId: string, patch: Record<string, unknown>) => void;
+  onDelete: (widgetId: string) => void;
 }
 
 /**
  * Every edge and corner, not just the bottom-right. A builder reaching for the top
  * edge to shrink a widget should not find a dead zone there.
  */
+/**
+ * Extra top/bottom inset on the page grid only.
+ * Widget name badges sit 20px above the item; without this they collide with
+ * the editor header when a container is dragged to the first row.
+ */
+const PAGE_GRID_PADDING_Y = 28;
+
 const RESIZE_HANDLES: ('s' | 'w' | 'e' | 'n' | 'sw' | 'nw' | 'se' | 'ne')[] = [
   's',
   'w',
@@ -112,6 +121,30 @@ function useMeasuredWidth(): [(node: HTMLDivElement | null) => void, number | nu
   return [ref, width];
 }
 
+/** Clicking empty canvas must drop both the blue selection and the caret in a field. */
+function deselectCanvas(handlers: CanvasHandlers): void {
+  handlers.onSelect(null);
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLElement &&
+    active.closest('.react-grid-layout, .nested-canvas')
+  ) {
+    active.blur();
+  }
+}
+
+function layoutDiffered(current: Layout[], next: Layout[]): boolean {
+  const incoming = new Map(
+    next.filter((item) => item.i !== '__dropping__').map((item) => [item.i, item]),
+  );
+  if (incoming.size !== current.length) return true;
+  return current.some((item) => {
+    const other = incoming.get(item.i);
+    if (!other) return true;
+    return other.x !== item.x || other.y !== item.y || other.w !== item.w || other.h !== item.h;
+  });
+}
+
 export function Canvas({
   page,
   runtime,
@@ -129,8 +162,13 @@ export function Canvas({
   return (
     <div
       className="min-h-full bg-white"
-      onClick={() => handlers.onSelect(null)}
-      onDragOver={(event) => event.preventDefault()}
+      onClick={() => deselectCanvas(handlers)}
+      onDragOver={(event) => acceptPaletteDrag(event)}
+      onDrop={(event) => {
+        const type = takePaletteDrop(event);
+        if (!type) return;
+        handlers.onDropWidget(dropParentId(event), type, { x: 0, y: 0 });
+      }}
     >
       <CanvasGrid
         widgets={page.widgets}
@@ -205,54 +243,82 @@ function CanvasGrid({
     [widgets],
   );
 
+  const draggingRef = useRef(false);
+
+  const commitLayout = useCallback(
+    (next: Layout[]) => {
+      handlers.onLayoutChange(
+        parentId,
+        next.filter((item) => item.i !== '__dropping__'),
+      );
+    },
+    [handlers, parentId],
+  );
+
+  const clearIfBackground = (event: React.MouseEvent): void => {
+    const item = (event.target as HTMLElement).closest('.react-grid-item');
+    if (item && event.currentTarget.contains(item)) return;
+    deselectCanvas(handlers);
+  };
+
   return (
+    <div
+      className={depth === 0 ? 'min-h-[600px]' : 'h-full min-h-full'}
+      onMouseDown={clearIfBackground}
+    >
     <GridLayout
       key={`grid-${fitVersion}`}
-      className={depth === 0 ? 'min-h-[600px]' : 'min-h-full'}
+      className="h-full min-h-full"
       layout={layout}
       cols={GRID_COLUMNS}
       rowHeight={GRID_ROW_HEIGHT}
       width={Math.max(width, 120)}
       margin={[GRID_GAP, GRID_GAP]}
-      containerPadding={[GRID_GAP, GRID_GAP]}
+      containerPadding={
+        depth === 0 ? [GRID_GAP, PAGE_GRID_PADDING_Y] : [GRID_GAP, 16]
+      }
       /*
-       * Widgets settle upwards.
-       *
-       * With free positioning a nudge that overlaps a neighbour pushes it down,
-       * and because nothing ever floats back the gap it leaves is permanent —
-       * two containers could be left with a screen of dead space between them
-       * after a movement of a few pixels. Vertical compaction makes the push
-       * reversible: move the widget away and the layout closes up behind it.
-       *
-       * The cost is that a deliberate vertical gap cannot be left by dragging a
-       * widget down the page; whitespace comes from a widget's own height or a
-       * spacer. That is the trade every grid builder of this kind makes, and it
-       * is worth it for a layout that cannot be left in a broken state.
+       * Free placement. Vertical compaction packed every widget to the top of
+       * the page or its container as soon as one moved, so containers and the
+       * controls inside them rode over each other. Gaps stay where the builder
+       * left them; a collision still pushes the neighbour aside.
        */
-      compactType="vertical"
-      /*
-       * Collisions push neighbours aside rather than cancelling the gesture.
-       * With `preventCollision` on, react-grid-layout rejects any resize that
-       * would overlap and snaps the widget back with no feedback — so growing a
-       * widget worked in open space and silently failed anywhere crowded, which
-       * reads as the handle being broken.
-       */
+      compactType={null}
       preventCollision={false}
-      isDroppable
-      droppingItem={{ i: '__dropping__', w: 4, h: 2 }}
-      onDrop={(_layout, item, event) => {
-        const type = (event as unknown as DragEvent).dataTransfer?.getData('widget/type');
-        if (type) handlers.onDropWidget(parentId, type, { x: item.x, y: item.y });
+      allowOverlap={false}
+      isDroppable={false}
+      onDragStart={() => {
+        draggingRef.current = true;
       }}
-      onLayoutChange={(next) => handlers.onLayoutChange(parentId, next)}
-      // `.nested-canvas` is a child container's grid: without it, dragging a child
-      // would drag its parent too.
-      draggableCancel=".no-drag, .nested-canvas"
+      onResizeStart={() => {
+        draggingRef.current = true;
+      }}
+      onDragStop={(next) => {
+        draggingRef.current = false;
+        commitLayout(next);
+      }}
+      onResizeStop={(next) => {
+        draggingRef.current = false;
+        commitLayout(next);
+      }}
+      onLayoutChange={(next) => {
+        // During a gesture the grid already owns the pixels. Writing those
+        // in-flight positions back into the document re-renders this grid with a
+        // new `layout` prop, which snaps the item to the origin and stacks it
+        // on its siblings.
+        if (draggingRef.current) return;
+        if (!layoutDiffered(layout, next)) return;
+        commitLayout(next);
+      }}
+      // Inputs are `.no-drag` so they can be typed into; grab the label, the
+      // left grip, or any chrome that is not the field itself.
+      draggableCancel=".no-drag, .nested-canvas, input, textarea, select"
       resizeHandles={RESIZE_HANDLES}
     >
       {widgets.map((widget) => (
         <div
           key={widget.id}
+          data-canvas-widget={widget.id}
           onClick={(event) => {
             event.stopPropagation();
             handlers.onSelect(widget.id);
@@ -264,11 +330,15 @@ function CanvasGrid({
               : 'hover:outline hover:outline-1 hover:outline-blue-300',
           )}
         >
+          <WidgetDragGrip />
           <WidgetLabel
             widget={widget}
             selected={handlers.selectedWidgetId === widget.id}
             isContainer={getWidgetDefinition(widget.type)?.isContainer ?? false}
           />
+          {handlers.selectedWidgetId === widget.id && (
+            <WidgetDeleteButton name={widget.name} onDelete={() => handlers.onDelete(widget.id)} />
+          )}
           <DesignWidget
             widget={widget}
             runtime={runtime}
@@ -279,6 +349,7 @@ function CanvasGrid({
         </div>
       ))}
     </GridLayout>
+    </div>
   );
 }
 
@@ -348,7 +419,15 @@ function DesignWidget({
    */
   if (registered.definition.childLayout === 'cells') {
     return (
-      <div className="nested-canvas h-full w-full" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="nested-canvas h-full w-full"
+        data-drop-parent={widget.id}
+        onClick={(event) => {
+          event.stopPropagation();
+          const hit = (event.target as HTMLElement).closest('[data-canvas-widget]');
+          if (!hit || !event.currentTarget.contains(hit)) deselectCanvas(handlers);
+        }}
+      >
         <Component
           {...shared}
           children={widget.children ?? []}
@@ -367,16 +446,21 @@ function DesignWidget({
   }
 
   return (
-    <div className="h-full w-full">
+    <div className="h-full w-full" data-drop-parent={widget.id}>
       <div className="h-full w-full">
         <Component
           {...shared}
+          children={widget.children ?? []}
           renderChildren={(filter) => (
             <div
               ref={innerRef}
               className="nested-canvas h-full min-h-20 w-full"
-              onClick={(event) => event.stopPropagation()}
-              onDragOver={(event) => event.preventDefault()}
+              data-drop-parent={widget.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                const hit = (event.target as HTMLElement).closest('[data-canvas-widget]');
+                if (!hit || !event.currentTarget.contains(hit)) deselectCanvas(handlers);
+              }}
             >
               {/* Held back until measured: rendering at a guessed width first would
                   lay children out, then shift them, which loses an in-flight drag. */}
@@ -426,6 +510,7 @@ function DesignChild({
 
   return (
     <div
+      data-canvas-widget={child.id}
       onClick={(event) => {
         event.stopPropagation();
         handlers.onSelect(child.id);
@@ -435,13 +520,18 @@ function DesignChild({
         isSelected ? 'outline-2 outline-blue-500' : 'hover:outline hover:outline-1 hover:outline-blue-300',
       )}
     >
+      <WidgetDragGrip />
       <WidgetLabel
         widget={child}
         selected={isSelected}
         isContainer={getWidgetDefinition(child.type)?.isContainer ?? false}
       />
+      {isSelected && (
+        <WidgetDeleteButton name={child.name} onDelete={() => handlers.onDelete(child.id)} />
+      )}
       <GridChildResizer
         child={child}
+        selected={isSelected}
         onCommit={(patch) => handlers.onUpdateProperties(child.id, patch)}
       >
         <DesignWidget
@@ -468,16 +558,59 @@ function WidgetLabel({
   return (
     <span
       className={clsx(
-        'absolute -top-5 left-0 z-20 flex items-center gap-1 rounded-t px-1.5 py-0.5 text-[10px] font-medium text-white',
-        selected ? 'bg-blue-500 opacity-100' : 'bg-blue-400 opacity-0 group-hover:opacity-80',
-        // A container's body is a drop target, so this label is the only place
-        // left to grab the container itself — it stays visible for that reason.
-        isContainer && 'cursor-grab opacity-80 active:cursor-grabbing',
+        'widget-drag-handle absolute -top-5 left-0 z-20 flex items-center gap-1 rounded-t px-1.5 py-0.5 text-[10px] font-medium text-white',
+        'cursor-grab active:cursor-grabbing',
+        selected ? 'bg-blue-500 opacity-100' : 'bg-blue-400 opacity-80 group-hover:opacity-100',
       )}
     >
       {isContainer && <span className="text-[9px] opacity-70">⠿</span>}
       {widget.name}
     </span>
+  );
+}
+
+/** Left-edge grip so a control whose field is `.no-drag` can still be moved. */
+function WidgetDragGrip() {
+  return (
+    <span
+      className="widget-drag-handle absolute inset-y-0 left-0 z-30 w-2 cursor-grab rounded-l bg-blue-500/0 hover:bg-blue-500/25 active:cursor-grabbing"
+      title="Drag to move"
+      aria-hidden="true"
+    />
+  );
+}
+
+/** Sits inside the selected widget so overflow on the grid cannot clip it. */
+function WidgetDeleteButton({ name, onDelete }: { name: string; onDelete: () => void }) {
+  return (
+    <button
+      type="button"
+      title={`Delete ${name}`}
+      aria-label={`Delete ${name}`}
+      className="no-drag absolute top-1 right-1 z-40 flex items-center gap-1 rounded border border-red-200 bg-white px-1.5 py-1 text-[11px] font-medium text-red-600 shadow-sm hover:bg-red-50"
+      onClick={(event) => {
+        event.stopPropagation();
+        onDelete();
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <TrashIcon />
+      Delete
+    </button>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M3 4.5h10M6 4.5V3h4v1.5M5 6.5v6m3-6v6m3-6v6M4.5 4.5l.5 9h6l.5-9"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

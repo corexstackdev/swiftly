@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ActionDsl, ApplicationDsl, EvaluationMap, PageDsl, WidgetDsl } from '@vinodapp/shared';
+import type { ActionDsl, ApplicationDsl, EvaluationMap, PageDsl, WidgetDsl } from '@swiftly/shared';
 import { api } from '@/lib/api';
 import { useEvaluation } from '@/evaluation/useEvaluation';
 import {

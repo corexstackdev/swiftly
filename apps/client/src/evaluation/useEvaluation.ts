@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { EvaluationMap } from '@vinodapp/shared';
+import type { EvaluationMap } from '@swiftly/shared';
 import type { EvaluateRequest, EvaluateResponse } from './worker';
 
 /**

@@ -1,14 +1,19 @@
-# Low-code application platform
+# Swiftly
 
-An enterprise platform where users visually build applications, connect to databases,
-configure APIs, test them in preview, and submit them for IT-gated publication.
+Build business apps without code. Swiftly is an enterprise low-code platform where
+users visually build applications, connect to databases, configure APIs, test them in
+preview, and submit them for IT-gated publication.
 
 Built on React and Node.js. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
 design, the stack decisions and what is and is not implemented yet.
 
 ## Getting started
 
-Requires Node 22+, pnpm 10+, and a Redis on `localhost:6379`.
+Requires Node 22+, pnpm 10+, and Redis. The bundled one listens on `localhost:6409`:
+
+```bash
+docker compose up -d redis
+```
 
 The platform's own store is SQLite, in `apps/server/prisma/dev.db` — there is
 nothing to install and nothing to start for it. Docker is optional, and only for
@@ -42,7 +47,7 @@ node -e "const c=require('crypto');console.log('SESSION_SECRET='+c.randomBytes(4
 Create the schema and seed an organization with three accounts:
 
 ```bash
-pnpm --filter @vinodapp/server db:migrate && pnpm --filter @vinodapp/server db:seed
+pnpm --filter @swiftly/server db:migrate && pnpm --filter @swiftly/server db:seed
 ```
 
 Run both apps:
@@ -91,9 +96,9 @@ anything already running on the machine.
 |---|---|
 | Client | 5173 |
 | API | 3001 |
-| Postgres (platform) | 5442 |
-| Redis | 6399 |
-| Postgres (sample data) | 5443 |
+| Postgres (platform) | 5452 |
+| Redis | 6409 |
+| Postgres (sample data) | 5453 |
 
 ## Two things worth knowing before changing anything
 

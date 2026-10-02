@@ -65,8 +65,8 @@ export function LoginPage() {
         }}
         className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
       >
-        <h1 className="text-lg font-semibold text-slate-900">Sign in</h1>
-        <p className="mt-1 mb-5 text-sm text-slate-500">Low-code application platform</p>
+        <h1 className="text-lg font-semibold text-slate-900">Sign in to Swiftly</h1>
+        <p className="mt-1 mb-5 text-sm text-slate-500">Build business apps without code</p>
 
         <label className="mb-3 block">
           <span className="mb-1 block text-xs font-medium text-slate-600">Email</span>

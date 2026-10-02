@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import type { EvaluationError, EvaluationMap } from '@vinodapp/shared';
+import type { EvaluationError, EvaluationMap } from '@swiftly/shared';
 import { parseBinding, type ParsedBinding } from './parser';
 import { affectedSubgraph, buildGraph, type SortedGraph } from './graph';
 
