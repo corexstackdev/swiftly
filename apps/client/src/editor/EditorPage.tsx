@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Link, useParams } from 'react-router-dom';
 import type { Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import type { ApplicationDsl, PageDsl, QueryEntity, WidgetDsl } from '@swiftly/shared';
+import { jsObjectsOnPage, type ApplicationDsl, type PageDsl, type QueryEntity, type WidgetDefinition, type WidgetDsl } from '@swiftly/shared';
 import { api, type DatasourceSummary, type Environment, ApiError } from '@/lib/api';
 import { useSession } from '@/lib/session';
 import { useAppRuntime } from '@/runtime/useAppRuntime';
@@ -18,7 +18,14 @@ import { EntityPanel } from './EntityPanel';
 import { PagesDropdown } from './PagesDropdown';
 import { PropertyPanel } from './PropertyPanel';
 import { PagePropertiesPanel, CANVAS_PRESETS, type CanvasPresetId } from './PagePropertiesPanel';
+import {
+  ENTITY_PANEL_SIZE,
+  PROPERTY_PANEL_SIZE,
+  PanelResizeHandle,
+  usePersistentPanelWidth,
+} from './PanelResizeHandle';
 import { QueryPanel, blankDefinition } from './QueryPanel';
+import { JsObjectPanel } from './JsObjectPanel';
 import {
   childListOf,
   findParent,
@@ -32,6 +39,8 @@ import {
   uniqueSlug,
   uniqueWidgetName,
 } from './widgetOps';
+import { copyJsName, nextAvailableName, takenJsNames } from './jsObjectOps';
+import { reflowGridChildren, seedCellProperties } from './gridCells';
 
 /** Guards against a collapsed pane; not a design width. */
 const MIN_CANVAS_WIDTH = 320;
@@ -41,6 +50,20 @@ const CANVAS_GUTTER = 10;
 
 /** Keeps the page off the editor chrome so a widget at y=0 is not under the header. */
 const CANVAS_TOP_GUTTER = 28;
+
+/** Reads the server's draft revision out of a 409 body, nested or flat. */
+function revisionFromConflict(error: ApiError): number | undefined {
+  const body = error.details;
+  if (!body || typeof body !== 'object') return undefined;
+  const record = body as Record<string, unknown>;
+  if (typeof record.currentRevision === 'number') return record.currentRevision;
+  const nested = record.message;
+  if (nested && typeof nested === 'object') {
+    const current = (nested as Record<string, unknown>).currentRevision;
+    if (typeof current === 'number') return current;
+  }
+  return undefined;
+}
 
 /**
  * The application editor.
@@ -124,7 +147,16 @@ function EditorBody({
   const { user } = useSession();
   const history = useDslHistory(initialDsl);
   const revisionRef = useRef(initialRevision);
+  const dslRef = useRef(history.dsl);
+  dslRef.current = history.dsl;
+  const markSavedRef = useRef(history.markSaved);
+  markSavedRef.current = history.markSaved;
   const canvasHostRef = useRef<HTMLDivElement>(null);
+  const savingRef = useRef(false);
+  const queuedSaveRef = useRef(false);
+  const conflictRef = useRef(false);
+  const conflictRetriesRef = useRef(0);
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   const [environmentId, setEnvironmentId] = useState(initialEnvironmentId);
   const [currentPageId, setCurrentPageId] = useState(
@@ -132,7 +164,8 @@ function EditorBody({
   );
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [selectedQueryName, setSelectedQueryName] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<'query' | 'errors' | null>(null);
+  const [selectedJsId, setSelectedJsId] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<'query' | 'errors' | 'js' | null>(null);
   const [canvasPreset, setCanvasPreset] = useState<CanvasPresetId>('fluid');
   const [availableWidth, setAvailableWidth] = useState(960);
   const [isPreview, setIsPreview] = useState(false);
@@ -142,6 +175,14 @@ function EditorBody({
   // third of the window, and the canvas is the part being worked on.
   const [entityPanelOpen, setEntityPanelOpen] = useState(true);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
+  const [entityPanelWidth, setEntityPanelWidth] = usePersistentPanelWidth(
+    'entity',
+    ENTITY_PANEL_SIZE,
+  );
+  const [propertyPanelWidth, setPropertyPanelWidth] = usePersistentPanelWidth(
+    'property',
+    PROPERTY_PANEL_SIZE,
+  );
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   /*
    * A conflict stops the autosave rather than joining it.
@@ -175,6 +216,53 @@ function EditorBody({
   const selectedParent = page ? findParent(page.widgets, selectedWidgetId ?? '') : null;
   const selectedQuery =
     history.dsl.queries.find((query) => query.name === selectedQueryName) ?? null;
+  const selectedJsObject =
+    (history.dsl.jsObjects ?? []).find((object) => object.id === selectedJsId) ?? null;
+
+  const renameJsObject = (id: string, name: string) => {
+    history.update((draft) => {
+      const target = (draft.jsObjects ?? []).find((object) => object.id === id);
+      if (!target) return;
+      const pageId = target.pageId ?? currentPageId;
+      const taken = takenJsNames(draft, pageId, id);
+      target.name = taken.has(name) ? nextAvailableName(name, taken) : name;
+    }, 'rename-js');
+  };
+
+  const copyJsObject = (id: string, pageId: string) => {
+    const source = (history.dsl.jsObjects ?? []).find((object) => object.id === id);
+    if (!source) return;
+    const name = copyJsName(source.name, takenJsNames(history.dsl, pageId));
+    const copyId = `js_${Math.random().toString(36).slice(2, 8)}`;
+    const code = source.code;
+    history.update((draft) => {
+      draft.jsObjects ??= [];
+      draft.jsObjects.push({ id: copyId, name, pageId, code });
+    }, 'copy-js');
+  };
+
+  const moveJsObject = (id: string, pageId: string) => {
+    history.update((draft) => {
+      const target = (draft.jsObjects ?? []).find((object) => object.id === id);
+      if (!target) return;
+      const taken = takenJsNames(draft, pageId, id);
+      if (taken.has(target.name)) target.name = nextAvailableName(target.name, taken);
+      target.pageId = pageId;
+    }, 'move-js');
+    setCurrentPageId(pageId);
+    setSelectedJsId(id);
+    setBottomTab('js');
+  };
+
+  const deleteJsObject = (id: string) => {
+    history.update((draft) => {
+      draft.jsObjects = (draft.jsObjects ?? []).filter((object) => object.id !== id);
+    }, 'delete-js');
+    if (selectedJsId === id) {
+      setSelectedJsId(null);
+      setBottomTab(null);
+    }
+  };
 
   const presetWidth = CANVAS_PRESETS.find((preset) => preset.id === canvasPreset)?.width ?? null;
 
@@ -234,37 +322,101 @@ function EditorBody({
 
   /* --- persistence ------------------------------------------------ */
 
-  const save = useCallback(async (): Promise<void> => {
-    setSaveState('saving');
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
     try {
-      const result = await api.applications.saveDraft(
-        applicationId,
-        history.dsl,
-        revisionRef.current,
-      );
+      channel = new BroadcastChannel(`swiftly-draft:${applicationId}`);
+      channel.onmessage = (event: MessageEvent) => {
+        const revision = event.data?.revision;
+        if (event.data?.type !== 'draft-saved' || typeof revision !== 'number') return;
+        // Another tab of this browser wrote. Adopt its revision so our next
+        // PUT matches the server instead of 409-ing on a stale number.
+        if (revision > revisionRef.current) revisionRef.current = revision;
+      };
+    } catch {
+      channel = null;
+    }
+    channelRef.current = channel;
+    return () => {
+      channel?.close();
+      channelRef.current = null;
+    };
+  }, [applicationId]);
+
+  const save = useCallback(async (): Promise<void> => {
+    if (conflictRef.current) return;
+    if (savingRef.current) {
+      queuedSaveRef.current = true;
+      return;
+    }
+
+    savingRef.current = true;
+    queuedSaveRef.current = false;
+    setSaveState('saving');
+
+    const payload = dslRef.current;
+    const expected = revisionRef.current;
+
+    try {
+      const result = await api.applications.saveDraft(applicationId, payload, expected);
       revisionRef.current = result.revision;
       failuresRef.current = 0;
-      history.markSaved();
+      conflictRetriesRef.current = 0;
+      markSavedRef.current(payload);
+      try {
+        channelRef.current?.postMessage({ type: 'draft-saved', revision: result.revision });
+      } catch {
+        /* BroadcastChannel is best-effort; a missing peer must not fail the save. */
+      }
       setSaveState('saved');
       setSaveMessage(null);
-      setTimeout(() => setSaveState('idle'), 1500);
+      setTimeout(() => setSaveState((state) => (state === 'saved' ? 'idle' : state)), 1500);
     } catch (error) {
-      setSaveState('error');
-
-      if (error instanceof ApiError && error.status === 409) {
+      if (error instanceof ApiError && error.status === 401) {
+        conflictRef.current = true;
         setConflict(true);
-        setSaveMessage(error.message);
+        setSaveState('error');
+        setSaveMessage(
+          'Your session expired. Sign in again to keep saving — this page still has your latest edits until you leave.',
+        );
         return;
       }
 
-      // Everything else might work on the next attempt — a dropped connection,
-      // a server restart — so it keeps trying, just further apart each time.
-      failuresRef.current += 1;
-      setSaveMessage(
-        error instanceof Error ? error.message : 'Could not save. Your changes are still here.',
-      );
+      if (error instanceof ApiError && error.status === 409) {
+        const remote = revisionFromConflict(error);
+        // One retry after adopting the server's revision recovers a stale
+        // number from an overlapping save or another tab of the same builder.
+        // A second 409 is a real conflict — stop rather than overwrite in a loop.
+        if (typeof remote === 'number' && conflictRetriesRef.current < 1) {
+          conflictRetriesRef.current += 1;
+          revisionRef.current = remote;
+          queuedSaveRef.current = true;
+        } else {
+          conflictRef.current = true;
+          setConflict(true);
+          setSaveState('error');
+          setSaveMessage(
+            typeof error.message === 'string' && error.message !== '[object Object]'
+              ? error.message
+              : 'This application was changed in another tab. Reload before saving.',
+          );
+        }
+      } else {
+        // A dropped connection or a server restart might work on the next try.
+        failuresRef.current += 1;
+        setSaveState('error');
+        setSaveMessage(
+          error instanceof Error ? error.message : 'Could not save. Your changes are still here.',
+        );
+      }
+    } finally {
+      savingRef.current = false;
+      if (queuedSaveRef.current && !conflictRef.current) {
+        queuedSaveRef.current = false;
+        void save();
+      }
     }
-  }, [applicationId, history]);
+  }, [applicationId]);
 
   useEffect(() => {
     if (!history.isDirty || conflict) return;
@@ -407,7 +559,7 @@ function EditorBody({
               definition.defaultLayout.h,
             ),
           },
-          properties: defaultProperties(definition),
+          properties: cellAwareProperties(target, parentId, siblings, definition, undefined),
           ...(definition.isContainer ? { children: [] } : {}),
         };
         siblings.push(widget);
@@ -439,7 +591,7 @@ function EditorBody({
           name: uniqueWidgetName(definition.displayName.replace(/\s+/g, ''), target),
           type,
           layout: { ...definition.defaultLayout },
-          properties: { ...defaultProperties(definition), ...seedProperties },
+          properties: cellAwareProperties(target, parentId, siblings, definition, seedProperties),
           ...(definition.isContainer ? { children: [] } : {}),
         };
         siblings.push(widget);
@@ -455,7 +607,13 @@ function EditorBody({
     (widgetId: string, patch: Record<string, unknown>) => {
       updatePage((target) => {
         const widget = findWidget(target.widgets, widgetId);
-        if (widget) widget.properties = { ...widget.properties, ...patch };
+        if (widget) {
+          const next = { ...widget.properties, ...patch };
+          for (const [key, value] of Object.entries(patch)) {
+            if (value == null) delete next[key];
+          }
+          widget.properties = next;
+        }
       }, `properties:${widgetId}`);
     },
     [updatePage],
@@ -487,6 +645,12 @@ function EditorBody({
           const widget = nextSiblings.find((candidate) => candidate.id === entry.i);
           if (widget) {
             widget.layout = { ...widget.layout, x: entry.x, y: entry.y, w: entry.w, h: entry.h };
+            if (widget.type === 'grid') {
+              widget.properties = {
+                ...widget.properties,
+                canvasSize: entry.h >= 26 ? 3 : entry.w >= 18 ? 2 : 1,
+              };
+            }
           }
         }
       }, `layout:${parentId ?? 'root'}`);
@@ -571,6 +735,13 @@ function EditorBody({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3">
+          <Link
+            to="/apps"
+            className="shrink-0 rounded px-1.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+          >
+            ← Back to projects
+          </Link>
+          <span className="text-xs text-slate-200">|</span>
           <PagesDropdown
             dsl={history.dsl}
             currentPageId={currentPageId}
@@ -709,16 +880,26 @@ function EditorBody({
 
           <aside
             className={clsx(
-              'shrink-0 border-r border-slate-200 bg-white',
-              entityPanelOpen ? 'w-60' : 'hidden',
+              'relative shrink-0 border-r border-slate-200 bg-white',
+              entityPanelOpen ? '' : 'hidden',
             )}
+            style={entityPanelOpen ? { width: entityPanelWidth } : undefined}
           >
+            <PanelResizeHandle
+              size={entityPanelWidth}
+              onSizeChange={setEntityPanelWidth}
+              side="end"
+              min={ENTITY_PANEL_SIZE.min}
+              max={ENTITY_PANEL_SIZE.max}
+              label="Resize left panel"
+            />
             <EntityPanel
               dsl={history.dsl}
               page={page}
               datasources={datasources}
               selectedQueryName={selectedQueryName}
               selectedWidgetId={selectedWidgetId}
+              selectedJsId={selectedJsId}
               onSelectWidget={setSelectedWidgetId}
               onAddWidget={(type) => {
                 /*
@@ -767,19 +948,46 @@ function EditorBody({
                 }, 'delete-query')
               }
               onCreateJsObject={() => {
+                if (!currentPageId) return;
                 const id = `js_${Math.random().toString(36).slice(2, 8)}`;
-                const name = uniqueName('Utils', history.dsl.jsObjects ?? []);
+                const name = uniqueName(
+                  'Utils',
+                  jsObjectsOnPage(history.dsl.jsObjects, currentPageId),
+                );
 
                 history.update((draft) => {
                   draft.jsObjects ??= [];
                   draft.jsObjects.push({
                     id,
                     name,
-                    code: 'module.exports = {\n  format(value) {\n    return String(value);\n  },\n};',
+                    pageId: currentPageId,
+                    code: `module.exports = {
+  format(value) {
+    return String(value);
+  },
+
+  // Behaviour → On change / On click → Run JS function.
+  // Find a control by its Id or Class, then assign value or other properties.
+  onChange(event) {
+    const source = document.byId(event.source.id);
+    // document.byId('w_input').value = source.value;
+    // document.querySelector('#w_select').options = [{ label: 'A', value: 'a' }];
+    // document.byClass('totals').forEach((el) => { el.disabled = false; });
+  },
+};`,
                   });
                 }, 'add-js');
+                setSelectedJsId(id);
+                setBottomTab('js');
               }}
-              onSelectJsObject={() => undefined}
+              onSelectJsObject={(id) => {
+                setSelectedJsId(id);
+                setBottomTab('js');
+              }}
+              onRenameJsObject={renameJsObject}
+              onCopyJsObject={copyJsObject}
+              onMoveJsObject={moveJsObject}
+              onDeleteJsObject={deleteJsObject}
             />
           </aside>
 
@@ -863,6 +1071,35 @@ function EditorBody({
                     }
                     onClose={() => setBottomTab(null)}
                   />
+                ) : bottomTab === 'js' ? (
+                  <JsObjectPanel
+                    jsObject={selectedJsObject}
+                    dsl={history.dsl}
+                    pages={history.dsl.pages}
+                    currentPageId={currentPageId}
+                    onChange={(mutate) => {
+                      if (!selectedJsId) return;
+                      history.update((draft) => {
+                        const target = (draft.jsObjects ?? []).find(
+                          (object) => object.id === selectedJsId,
+                        );
+                        if (target) mutate(target);
+                      }, 'edit-js');
+                    }}
+                    onClose={() => setBottomTab(null)}
+                    onDelete={() => {
+                      if (selectedJsId) deleteJsObject(selectedJsId);
+                    }}
+                    onRename={(name) => {
+                      if (selectedJsId) renameJsObject(selectedJsId, name);
+                    }}
+                    onCopyToPage={(pageId) => {
+                      if (selectedJsId) copyJsObject(selectedJsId, pageId);
+                    }}
+                    onMoveToPage={(pageId) => {
+                      if (selectedJsId) moveJsObject(selectedJsId, pageId);
+                    }}
+                  />
                 ) : (
                   <ErrorList
                     errors={runtime.evaluationErrors}
@@ -887,22 +1124,58 @@ function EditorBody({
 
           <aside
             className={clsx(
-              'shrink-0 overflow-hidden border-l border-slate-200 bg-white',
-              propertyPanelOpen ? 'w-72' : 'hidden',
+              'relative shrink-0 overflow-hidden border-l border-slate-200 bg-white',
+              propertyPanelOpen ? '' : 'hidden',
             )}
+            style={propertyPanelOpen ? { width: propertyPanelWidth } : undefined}
           >
+            <PanelResizeHandle
+              size={propertyPanelWidth}
+              onSizeChange={setPropertyPanelWidth}
+              side="start"
+              min={PROPERTY_PANEL_SIZE.min}
+              max={PROPERTY_PANEL_SIZE.max}
+              label="Resize right panel"
+            />
             {selectedWidget ? (
               <PropertyPanel
                 widget={selectedWidget}
                 parent={selectedParent}
                 dsl={history.dsl}
+                pageId={currentPageId}
                 evaluated={runtime.evaluated}
                 onChange={(key, value) =>
                   updatePage((target) => {
                     const widget = findWidget(target.widgets, selectedWidgetId ?? '');
-                    if (widget) widget.properties[key] = value;
+                    if (!widget) return;
+                    widget.properties =
+                      value == null
+                        ? Object.fromEntries(
+                            Object.entries({ ...widget.properties }).filter(([name]) => name !== key),
+                          )
+                        : { ...widget.properties, [key]: value };
+                    if (widget.type === 'grid' && key === 'columns') {
+                      reflowGridChildren(widget, Number(value));
+                    }
                   }, `property:${key}`)
                 }
+                onLayout={(patch) => {
+                  updatePage((target) => {
+                    const widget = findWidget(target.widgets, selectedWidgetId ?? '');
+                    if (!widget) return;
+                    const { canvasSize, ...layoutPatch } = patch;
+                    widget.layout = { ...widget.layout, ...layoutPatch };
+                    widget.properties = {
+                      ...widget.properties,
+                      canvasSize:
+                        canvasSize ??
+                        (widget.layout.h >= 26 ? 3 : widget.layout.w >= 18 ? 2 : 1),
+                    };
+                  }, 'layout');
+                  // react-grid-layout keeps its own copy of w/h and will not
+                  // adopt a size written from the property panel unless remounted.
+                  setFitVersion((version) => version + 1);
+                }}
                 onRename={(name) =>
                   updatePage((target) => {
                     const widget = findWidget(target.widgets, selectedWidgetId ?? '');
@@ -1043,7 +1316,7 @@ function ErrorList({
       <div className="min-h-0 flex-1 overflow-auto">
         {timedOut ? (
           <p className="p-4 text-sm text-red-700">
-            Evaluation was stopped after 5 seconds. One of the bindings on this page is likely
+            Evaluation was stopped after 15 seconds. One of the bindings on this page is likely
             looping — the worker has been restarted, so the editor is still usable.
           </p>
         ) : errors.length === 0 ? (
@@ -1061,6 +1334,21 @@ function ErrorList({
       </div>
     </div>
   );
+}
+
+function cellAwareProperties(
+  page: PageDsl,
+  parentId: string | null,
+  siblings: WidgetDsl[],
+  definition: WidgetDefinition,
+  seed?: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = { ...defaultProperties(definition), ...seed };
+  if (!parentId) return properties;
+  const parent = findWidget(page.widgets, parentId);
+  if (!parent || getWidgetDefinition(parent.type)?.childLayout !== 'cells') return properties;
+  const columns = Math.max(1, Number(parent.properties.columns ?? 3));
+  return seedCellProperties(siblings, columns, properties);
 }
 
 function CenteredMessage({ title, detail }: { title: string; detail?: string }) {

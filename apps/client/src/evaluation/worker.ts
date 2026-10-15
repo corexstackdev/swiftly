@@ -2,6 +2,7 @@
 import type { EvaluationError, EvaluationMap } from '@swiftly/shared';
 import { parseBinding, type ParsedBinding } from './parser';
 import { affectedSubgraph, buildGraph, type SortedGraph } from './graph';
+import { hydrateJsObjects, isJsObjectStub } from './jsObjects';
 
 /**
  * The evaluation worker.
@@ -38,11 +39,24 @@ let parsedCache = new Map<string, ParsedBinding>();
 let graph: SortedGraph | null = null;
 let graphKey = '';
 let lastEvaluated: EvaluationMap = {};
+let latestRequestId = 0;
+
+/**
+ * Resolved `async` / `fetch` results, keyed by the expression and the values it
+ * actually reads. A table bound to `{{ Utils.fetchPosts() }}` must not hit the
+ * network again every time an unrelated input changes.
+ */
+const asyncCache = new Map<string, unknown>();
+const asyncInflight = new Map<string, Promise<unknown>>();
 
 self.onmessage = (event: MessageEvent<EvaluateRequest>) => {
   const message = event.data;
   if (message.type !== 'evaluate') return;
+  void runEvaluate(message);
+};
 
+async function runEvaluate(message: EvaluateRequest): Promise<void> {
+  latestRequestId = message.requestId;
   const started = performance.now();
   const { dataTree, bindings, changedPaths } = message;
 
@@ -74,9 +88,10 @@ self.onmessage = (event: MessageEvent<EvaluateRequest>) => {
       : graph.order.filter((p) => parsed.has(p));
 
   const evaluated: EvaluationMap = changedPaths ? { ...lastEvaluated } : {};
-  const scope: Record<string, unknown> = { ...dataTree };
+  const scope: Record<string, unknown> = hydrateJsObjects({ ...dataTree });
 
   for (const path of toEvaluate) {
+    if (latestRequestId !== message.requestId) return;
     const binding = parsed.get(path);
     if (!binding) continue;
 
@@ -93,30 +108,33 @@ self.onmessage = (event: MessageEvent<EvaluateRequest>) => {
       continue;
     }
 
-    evaluated[path] = evaluateBinding(binding, scope, path);
+    evaluated[path] = await evaluateBinding(binding, scope, path, dataTree);
 
     // Results feed the scope so a later binding in the order sees them.
     writePath(scope, path, evaluated[path]!.value);
   }
+
+  if (latestRequestId !== message.requestId) return;
 
   lastEvaluated = evaluated;
 
   const response: EvaluateResponse = {
     type: 'result',
     requestId: message.requestId,
-    evaluated,
+    evaluated: cloneableMap(evaluated),
     cycles: graph.cycles,
     durationMs: performance.now() - started,
     recomputed: toEvaluate.length,
   };
   self.postMessage(response);
-};
+}
 
-function evaluateBinding(
+async function evaluateBinding(
   binding: ParsedBinding,
   scope: Record<string, unknown>,
   path: string,
-): { value: unknown; error?: EvaluationError } {
+  dataTree: Record<string, unknown>,
+): Promise<{ value: unknown; error?: EvaluationError }> {
   if (binding.syntaxError) {
     return {
       value: undefined,
@@ -127,7 +145,7 @@ function evaluateBinding(
   const results: unknown[] = [];
   for (const expression of binding.expressions) {
     try {
-      results.push(run(expression, scope));
+      results.push(await resolveExpression(expression, scope, binding.dependencies, dataTree));
     } catch (error) {
       return {
         value: undefined,
@@ -154,6 +172,85 @@ function evaluateBinding(
   return { value: out };
 }
 
+async function resolveExpression(
+  expression: string,
+  scope: Record<string, unknown>,
+  dependencies: string[],
+  dataTree: Record<string, unknown>,
+): Promise<unknown> {
+  const value = run(expression, scope);
+  if (!isThenable(value)) return value;
+
+  const cacheKey = asyncCacheKey(expression, dependencies, dataTree);
+  if (asyncCache.has(cacheKey)) return asyncCache.get(cacheKey);
+
+  let pending = asyncInflight.get(cacheKey);
+  if (!pending) {
+    pending = Promise.resolve(value).then((resolved) => {
+      if (resolved === undefined || resolved === null) {
+        throw new Error(
+          'The function finished but returned nothing. Return the data (for example `return response.json()`), not `console.log(...)`.',
+        );
+      }
+      rememberAsync(cacheKey, resolved);
+      return resolved;
+    });
+    asyncInflight.set(cacheKey, pending);
+  }
+
+  try {
+    return await pending;
+  } finally {
+    asyncInflight.delete(cacheKey);
+  }
+}
+
+function isThenable(value: unknown): value is Promise<unknown> {
+  return Boolean(value && (typeof value === 'object' || typeof value === 'function') && typeof (value as Promise<unknown>).then === 'function');
+}
+
+function asyncCacheKey(
+  expression: string,
+  dependencies: string[],
+  dataTree: Record<string, unknown>,
+): string {
+  const parts = [expression];
+  for (const path of dependencies) {
+    parts.push(`${path}=${snapshotPath(dataTree, path)}`);
+  }
+  return parts.join('\n');
+}
+
+function snapshotPath(tree: Record<string, unknown>, path: string): string {
+  const [entity, prop] = path.split('.');
+  if (!entity) return '';
+  const value = tree[entity];
+  if (isJsObjectStub(value)) return `js:${value.code}`;
+  if (prop === undefined) return stableSnapshot(value);
+  if (value && typeof value === 'object') {
+    return stableSnapshot((value as Record<string, unknown>)[prop]);
+  }
+  return '';
+}
+
+function stableSnapshot(value: unknown): string {
+  if (value === undefined) return '';
+  if (typeof value === 'function') return '[function]';
+  if (isJsObjectStub(value)) return `js:${value.code}`;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function rememberAsync(cacheKey: string, value: unknown): void {
+  asyncCache.set(cacheKey, value);
+  if (asyncCache.size <= 40) return;
+  const oldest = asyncCache.keys().next().value;
+  if (oldest !== undefined) asyncCache.delete(oldest);
+}
+
 const compiled = new Map<string, (scope: Record<string, unknown>) => unknown>();
 
 /**
@@ -178,6 +275,9 @@ function run(expression: string, scope: Record<string, unknown>): unknown {
 
 function stringify(value: unknown): string {
   if (value === null || value === undefined) return '';
+  if (typeof value === 'function') {
+    return value.name ? `[Function ${value.name}]` : '[Function]';
+  }
   if (typeof value === 'object') {
     try {
       return JSON.stringify(value);
@@ -186,6 +286,40 @@ function stringify(value: unknown): string {
     }
   }
   return String(value);
+}
+
+/**
+ * Structured clone cannot carry functions. A binding that returns one (or an
+ * object holding one) would otherwise fail postMessage and leave the page unevaluated.
+ */
+function cloneableMap(evaluated: EvaluationMap): EvaluationMap {
+  const next: EvaluationMap = {};
+  for (const [path, result] of Object.entries(evaluated)) {
+    next[path] = { ...result, value: toCloneable(result.value) };
+  }
+  return next;
+}
+
+function toCloneable(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (value === null || value === undefined) return value;
+  const type = typeof value;
+  if (type === 'function') {
+    if (isThenable(value)) return undefined;
+    const name = (value as { name?: string }).name;
+    return name ? `[Function ${name}]` : '[Function]';
+  }
+  if (type === 'symbol' || type === 'bigint') return String(value);
+  if (type !== 'object') return value;
+  if (isThenable(value)) return undefined;
+  const object = value as object;
+  if (seen.has(object)) return '[Circular]';
+  seen.add(object);
+  if (Array.isArray(value)) return value.map((entry) => toCloneable(entry, seen));
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = toCloneable(entry, seen);
+  }
+  return out;
 }
 
 /** Writes `Entity.property` into the scope so dependents read the evaluated value. */

@@ -64,6 +64,16 @@ export interface JsObjectDsl {
   id?: string;
   name: string;
   code: string;
+  /** Page this object belongs to. Absent on older documents — those stay visible on every page. */
+  pageId?: string;
+}
+
+/** Objects on a page, plus unscoped ones from before JS objects were per-page. */
+export function jsObjectsOnPage(
+  objects: JsObjectDsl[] | undefined,
+  pageId: string,
+): JsObjectDsl[] {
+  return (objects ?? []).filter((object) => !object.pageId || object.pageId === pageId);
 }
 
 /* ------------------------------------------------------------------ *
@@ -119,6 +129,8 @@ export type ActionDsl =
   | { type: 'closeModal'; widgetName: string }
   | { type: 'setState'; key: string; value: unknown }
   | { type: 'runJs'; code: string }
+  /** Call an exported function on a JS object, e.g. `Utils.onCityChange`. */
+  | { type: 'runJsFunction'; path: string }
   | { type: 'download'; data: unknown; fileName: string; mimeType: string };
 
 export type ActionType = ActionDsl['type'];

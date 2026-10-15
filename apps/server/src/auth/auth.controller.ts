@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { AuthService, type TokenPair } from './auth.service';
@@ -16,7 +17,10 @@ const switchOrgSchema = z.object({ organizationId: z.string().uuid() });
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Public()
   @Post('login')
@@ -31,7 +35,14 @@ export class AuthController {
   @Post('refresh')
   async refresh(@Req() req: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) {
     const cookies = (req as FastifyRequest & { cookies?: Record<string, string> }).cookies;
-    const tokens = await this.auth.refresh(cookies?.refresh_token ?? '');
+    const header = typeof req.headers.cookie === 'string' ? req.headers.cookie : '';
+    const fromHeader = header
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith('refresh_token='))
+      ?.slice('refresh_token='.length);
+    const refreshToken = cookies?.refresh_token || (fromHeader ? decodeURIComponent(fromHeader) : '');
+    const tokens = await this.auth.refresh(refreshToken);
     this.setAuthCookies(reply, tokens);
     return { ok: true };
   }
@@ -65,19 +76,21 @@ export class AuthController {
    */
   private setAuthCookies(reply: FastifyReply, tokens: TokenPair): void {
     const secure = process.env.NODE_ENV === 'production';
+    const accessMaxAge = this.config.get<number>('ACCESS_TOKEN_TTL', 900);
+    const refreshMaxAge = this.config.get<number>('REFRESH_TOKEN_TTL', 2_592_000);
     reply.setCookie('access_token', tokens.accessToken, {
       httpOnly: true,
       secure,
       sameSite: 'lax',
       path: '/',
-      maxAge: 15 * 60,
+      maxAge: accessMaxAge,
     });
     reply.setCookie('refresh_token', tokens.refreshToken, {
       httpOnly: true,
       secure,
       sameSite: 'lax',
       path: '/',
-      maxAge: 30 * 24 * 60 * 60,
+      maxAge: refreshMaxAge,
     });
   }
 }

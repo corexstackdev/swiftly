@@ -3,10 +3,10 @@ import clsx from 'clsx';
 import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
-import { FieldLabel, LABEL_PROPERTIES } from './FieldLabel';
+import { FieldLabel, LABEL_PROPERTIES, labelProperties } from './FieldLabel';
 import { fieldControlStyle, textStyleProperties, textStyleToCss } from './textStyle';
 import {
-  clampToBounds,
+  constrainNumeric,
   fieldBounds,
   mergeFieldRules,
   showFieldError,
@@ -21,6 +21,30 @@ import {
  * is what every SQL dialect we target accepts as a date parameter.
  */
 
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  INR: '₹',
+  JPY: '¥',
+  CNY: '¥',
+  AUD: 'A$',
+  CAD: 'C$',
+};
+
+function currencySymbolOf(properties: Record<string, unknown>): string {
+  const explicit = properties.currencySymbol;
+  if (typeof explicit === 'string' && explicit.trim() !== '') return explicit.trim();
+  return CURRENCY_SYMBOLS[String(properties.currency ?? 'USD')] ?? '$';
+}
+
+function stepFromDecimals(decimals: unknown): number {
+  const places = Number(decimals ?? 2);
+  if (!Number.isFinite(places) || places <= 0) return 1;
+  const n = Math.min(8, Math.trunc(places));
+  return Number((1 / 10 ** n).toFixed(n));
+}
+
 /* ------------------------------------------------------------------ *
  * Number input
  * ------------------------------------------------------------------ */
@@ -32,7 +56,7 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
   const raw = useSeededValue(state, setState, properties.defaultValue, { isDesignMode });
   const rules = mergeFieldRules(properties);
   const bounds = fieldBounds(properties);
-  const constrained = clampToBounds(raw, properties);
+  const constrained = constrainNumeric(raw, properties);
   const value = constrained === undefined || constrained === null ? '' : String(constrained);
   const touched = Boolean(state.touched);
   const result = validate(value, rules);
@@ -54,7 +78,7 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
 
   const prefix =
     properties.format === 'currency'
-      ? String(properties.currencySymbol ?? '$')
+      ? currencySymbolOf(properties)
       : properties.format === 'percent'
         ? '%'
         : null;
@@ -88,7 +112,7 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
             // Empty stays undefined rather than becoming 0, so a cleared optional
             // field does not silently submit a value the user never typed.
             const next = event.target.value === '' ? undefined : Number(event.target.value);
-            const clamped = clampToBounds(next, properties);
+            const clamped = constrainNumeric(next, properties);
             setState({
               value: clamped,
               isValid: validate(clamped === undefined || clamped === null ? '' : String(clamped), rules)
@@ -97,7 +121,7 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
             fireEvent('onChange', { value: clamped });
           }}
           onBlur={() => {
-            const clamped = clampToBounds(raw, properties);
+            const clamped = constrainNumeric(raw, properties);
             setState({
               value: clamped,
               touched: true,
@@ -108,7 +132,7 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
           }}
           className={clsx(
             'no-drag h-full w-full rounded border px-2 outline-none focus:ring-2 focus:ring-blue-500/30',
-            prefix && 'pl-6',
+            prefix && (String(prefix).length > 1 ? 'pl-8' : 'pl-6'),
             showError ? 'border-red-400' : 'border-slate-300 focus:border-blue-500',
             'disabled:bg-slate-50 disabled:text-slate-400',
           )}
@@ -201,8 +225,140 @@ export const numberInputWidget: RegisteredWidget = {
 };
 
 /* ------------------------------------------------------------------ *
- * Date picker
+ * Currency input
  * ------------------------------------------------------------------ */
+
+function CurrencyInputWidget(props: WidgetProps) {
+  return (
+    <NumberInputWidget
+      {...props}
+      properties={{
+        ...props.properties,
+        format: 'currency',
+        currencySymbol: currencySymbolOf(props.properties),
+        decimals: props.properties.decimals ?? 2,
+        step: props.properties.step ?? stepFromDecimals(props.properties.decimals ?? 2),
+      }}
+    />
+  );
+}
+
+export const currencyInputWidget: RegisteredWidget = {
+  component: CurrencyInputWidget,
+  definition: {
+    type: 'currency_input',
+    displayName: 'Currency Input',
+    category: 'input',
+    icon: 'currency',
+    defaultLayout: { x: 0, y: 0, w: 4, h: 2 },
+    minSize: { w: 2, h: 1 },
+    events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
+    exposedState: [
+      { key: 'value', type: 'number', description: 'Amount as a number' },
+      { key: 'isValid', type: 'boolean', description: 'Whether validation passes' },
+    ],
+    properties: [
+      {
+        name: 'Content',
+        properties: [
+          ...labelProperties('Amount'),
+          {
+            key: 'placeholder',
+            label: 'Placeholder',
+            control: 'text',
+            expectedType: 'string',
+            bindable: true,
+            defaultValue: '0.00',
+          },
+          {
+            key: 'defaultValue',
+            label: 'Default value',
+            control: 'number',
+            expectedType: 'number',
+            bindable: true,
+          },
+          {
+            key: 'currency',
+            label: 'Currency',
+            control: 'select',
+            expectedType: 'string',
+            bindable: false,
+            defaultValue: 'USD',
+            options: [
+              { value: 'USD', label: 'USD ($)' },
+              { value: 'EUR', label: 'EUR (€)' },
+              { value: 'GBP', label: 'GBP (£)' },
+              { value: 'INR', label: 'INR (₹)' },
+              { value: 'JPY', label: 'JPY (¥)' },
+              { value: 'CNY', label: 'CNY (¥)' },
+              { value: 'AUD', label: 'AUD (A$)' },
+              { value: 'CAD', label: 'CAD (C$)' },
+            ],
+          },
+          {
+            key: 'currencySymbol',
+            label: 'Symbol',
+            control: 'text',
+            expectedType: 'string',
+            bindable: true,
+            helpText: 'Leave blank to use the currency’s usual symbol.',
+          },
+          {
+            key: 'decimals',
+            label: 'Decimals',
+            control: 'number',
+            expectedType: 'number',
+            bindable: false,
+            defaultValue: 2,
+            helpText: 'How many places after the point. Amounts round to this on entry.',
+          },
+        ],
+      },
+      {
+        name: 'Range',
+        properties: [
+          {
+            key: 'min',
+            label: 'Minimum',
+            control: 'number',
+            expectedType: 'number',
+            bindable: true,
+            helpText: 'Values below this are corrected as you type.',
+          },
+          {
+            key: 'max',
+            label: 'Maximum',
+            control: 'number',
+            expectedType: 'number',
+            bindable: true,
+            helpText: 'Values above this are corrected as you type.',
+          },
+        ],
+      },
+      {
+        name: 'Validation',
+        properties: [
+          { key: 'validation', label: 'Rules', control: 'validation_rules', expectedType: 'array', bindable: false, defaultValue: [] },
+        ],
+      },
+      {
+        name: 'Label style',
+        properties: textStyleProperties('label'),
+      },
+      {
+        name: 'Field style',
+        properties: textStyleProperties('input', { fontSize: 14 }),
+      },
+      {
+        name: 'Behaviour',
+        properties: [
+          { key: 'disabled', label: 'Disabled', control: 'toggle', expectedType: 'boolean', bindable: true, defaultValue: false },
+          { key: 'onChange', label: 'On change', control: 'action_list', expectedType: 'any', bindable: false },
+        ],
+      },
+    ],
+  },
+};
 
 function DatePickerWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
   const seeded = useSeededValue(state, setState, properties.defaultValue, { isDesignMode });

@@ -9,15 +9,16 @@ design, the stack decisions and what is and is not implemented yet.
 
 ## Getting started
 
-Requires Node 22+, pnpm 10+, and Redis. The bundled one listens on `localhost:6409`:
+Requires Node 22+, pnpm 10+, PostgreSQL, and Redis. The bundled Redis listens on
+`localhost:6409`:
 
 ```bash
 docker compose up -d redis
 ```
 
-The platform's own store is SQLite, in `apps/server/prisma/dev.db` — there is
-nothing to install and nothing to start for it. Docker is optional, and only for
-the sample database the datasource plugins practise against.
+The platform's own store is PostgreSQL. Create a local database named `swiftlydb`
+and point `DATABASE_URL` at it (see `.env.example`). Docker Postgres is optional
+if you already run PostgreSQL locally.
 
 ```bash
 pnpm install
@@ -89,16 +90,16 @@ docs/
 
 ## Ports
 
-The platform's own Postgres and Redis use non-default ports so they do not collide with
-anything already running on the machine.
+Redis uses a non-default port so it does not collide with anything already running
+on the machine. The platform database is your local PostgreSQL (`swiftlydb` on 5432).
 
 | Service | Port |
 |---|---|
 | Client | 5173 |
 | API | 3001 |
-| Postgres (platform) | 5452 |
+| PostgreSQL (platform, `swiftlydb`) | 5432 |
 | Redis | 6409 |
-| Postgres (sample data) | 5453 |
+| Postgres (sample data, optional Docker) | 5453 |
 
 ## Two things worth knowing before changing anything
 

@@ -15,11 +15,27 @@ export interface JwtPayload {
 }
 
 /** Prefers the httpOnly cookie; the bearer header is for API clients. */
-const fromCookie = (req: FastifyRequest): string | null => {
-  const token = (req as FastifyRequest & { cookies?: Record<string, string> }).cookies
-    ?.access_token;
-  return token ?? null;
-};
+function tokenFromCookie(req: FastifyRequest, name: string): string | null {
+  const request = req as FastifyRequest & {
+    cookies?: Record<string, string>;
+    raw?: { headers?: { cookie?: string } };
+  };
+  const direct = request.cookies?.[name];
+  if (typeof direct === 'string' && direct.length > 0) return direct;
+
+  const header = request.headers?.cookie ?? request.raw?.headers?.cookie;
+  if (typeof header !== 'string') return null;
+  const prefix = `${name}=`;
+  for (const part of header.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return null;
+}
+
+const fromCookie = (req: FastifyRequest): string | null => tokenFromCookie(req, 'access_token');
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {

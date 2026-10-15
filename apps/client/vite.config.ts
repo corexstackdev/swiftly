@@ -18,6 +18,19 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: false,
+        configure(proxy) {
+          // Login sets access_token and refresh_token as two Set-Cookie headers.
+          // If the proxy collapses them, refresh never lands in the browser and
+          // every draft save 401s once the 15-minute access cookie expires.
+          proxy.on('proxyRes', (proxyRes) => {
+            const cookies = proxyRes.headers['set-cookie'];
+            if (!cookies) return;
+            const list = Array.isArray(cookies) ? cookies : [cookies];
+            proxyRes.headers['set-cookie'] = list.map((cookie) =>
+              cookie.replace(/;\s*Domain=[^;]*/i, ''),
+            );
+          });
+        },
       },
     },
   },

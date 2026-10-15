@@ -129,11 +129,11 @@ export class AuthService {
     const [accessToken, refreshToken] = await Promise.all([
       this.jwt.signAsync(
         { sub: userId, org: organizationId, type: 'access' } satisfies JwtPayload,
-        { secret, expiresIn: this.config.get<number>('ACCESS_TOKEN_TTL', 900) },
+        { secret, expiresIn: `${this.config.get<number>('ACCESS_TOKEN_TTL', 900)}s` },
       ),
       this.jwt.signAsync(
         { sub: userId, org: organizationId, type: 'refresh' } satisfies JwtPayload,
-        { secret, expiresIn: this.config.get<number>('REFRESH_TOKEN_TTL', 2_592_000) },
+        { secret, expiresIn: `${this.config.get<number>('REFRESH_TOKEN_TTL', 2_592_000)}s` },
       ),
     ]);
     return { accessToken, refreshToken };

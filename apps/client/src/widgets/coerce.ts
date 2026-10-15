@@ -35,6 +35,63 @@ export function asArray(value: unknown): unknown[] {
 }
 
 /**
+ * Options for a Select (and anything else that used to ask for a hand-built list).
+ *
+ * Source Data is typed JSON, a binding that already evaluated to a list, or an
+ * object map. The shapes we accept are the ones people actually paste:
+ * `["Red","Green"]`, `[{label,value}]`, `{ "us": "United States" }`, and the
+ * `{ data: [...] }` wrapper most REST queries return.
+ */
+export function asSourceList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+
+  let parsed = value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text || text.startsWith('{{')) return [];
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return [];
+    }
+  }
+
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed === null || typeof parsed !== 'object') return [];
+
+  const record = parsed as Record<string, unknown>;
+  for (const key of ['data', 'options', 'items', 'rows']) {
+    if (Array.isArray(record[key])) return record[key] as unknown[];
+  }
+
+  return Object.entries(record).map(([key, entry]) => {
+    if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+      const row = entry as Record<string, unknown>;
+      return { value: row.value ?? key, label: row.label ?? key, ...row };
+    }
+    return { value: key, label: String(entry) };
+  });
+}
+
+/** Why Source Data produced no options, or null when the value is fine or empty. */
+export function sourceDataError(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return null;
+  if (typeof value !== 'string') return null;
+
+  const text = value.trim();
+  if (!text || text.includes('{{')) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed) || (parsed !== null && typeof parsed === 'object')) return null;
+    return 'Source Data must be a JSON array or object';
+  } catch {
+    return 'Source Data must be valid JSON';
+  }
+}
+
+/**
  * The same, for a list of rows.
  *
  * An array that is already an array is handed straight back rather than filtered.
@@ -46,7 +103,25 @@ export function asArray(value: unknown): unknown[] {
  */
 export function asRows(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) return value as Record<string, unknown>[];
-  return asArray(value) as Record<string, unknown>[];
+
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text || text.startsWith('{{')) return [];
+    try {
+      return asRows(JSON.parse(text));
+    } catch {
+      return [];
+    }
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const key of ['data', 'rows', 'items']) {
+      if (Array.isArray(record[key])) return record[key] as Record<string, unknown>[];
+    }
+  }
+
+  return [];
 }
 
 /** One row, when a caller needs to be sure it really is an object. */

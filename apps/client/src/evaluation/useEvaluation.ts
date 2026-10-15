@@ -10,7 +10,7 @@ import type { EvaluateRequest, EvaluateResponse } from './worker';
  * replaced. Without that, one bad binding bricks the editor until a page reload.
  */
 
-const EVALUATION_TIMEOUT_MS = 5_000;
+const EVALUATION_TIMEOUT_MS = 15_000;
 
 export interface EvaluationState {
   evaluated: EvaluationMap;
@@ -47,6 +47,7 @@ export function useEvaluation(): {
 
     worker.onmessage = (event: MessageEvent<EvaluateResponse>) => {
       if (event.data.type !== 'result') return;
+      if (event.data.requestId !== requestIdRef.current) return;
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
       setState({
         evaluated: event.data.evaluated,

@@ -5,13 +5,19 @@ import type { RegisteredWidget, WidgetProps } from './types';
 import { textStyleProperties, textStyleToCss } from './textStyle';
 import { stateStyleProperties, stateStyleToCss } from './stateStyle';
 import { formatValue } from './formatValue';
-import { asRows, isRow } from './coerce';
+import { asRows, isRow, sourceDataError } from './coerce';
 import {
   cellValue,
   normaliseColumns,
   resolveColumns,
   type TableColumnConfig,
 } from './tableColumns';
+import {
+  emptyRowHint,
+  ROW_SOURCE_PROPERTIES,
+  rowSource,
+  rowSourceConfigured,
+} from './choiceSource';
 
 /**
  * The table.
@@ -57,13 +63,16 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
 
   /* --- data ------------------------------------------------------- */
 
-  const showingSample = properties.data === undefined && isDesignMode;
+  const source = rowSource(properties);
+  const sourceError = sourceDataError(source);
+  const configured = rowSourceConfigured(properties);
+  const showingSample = !configured && isDesignMode;
 
   // Memoised on the raw property: `asRows` must not run per render, and its
   // result must keep the same identity so nothing downstream recomputes.
   const rows = useMemo<Record<string, unknown>[]>(
-    () => (showingSample ? SAMPLE_ROWS : asRows(properties.data)),
-    [showingSample, properties.data],
+    () => (showingSample ? SAMPLE_ROWS : asRows(source)),
+    [showingSample, source],
   );
 
   const pagingMode = String(properties.paging ?? 'scroll') as PagingMode;
@@ -258,7 +267,7 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
           </span>
           {showingSample && (
             <span
-              title="Placeholder rows so the table can be styled. They disappear once Table data is bound, and never appear in preview or a published app."
+              title="Placeholder rows so the table can be styled. They disappear once Source Data or a JavaScript function is set, and never appear in preview or a published app."
               className="shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold tracking-wide text-amber-700 uppercase"
             >
               Sample
@@ -415,8 +424,8 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
         </table>
 
         {pageRows.length === 0 && (
-          <div className="flex h-24 items-center justify-center text-sm text-slate-400">
-            {properties.data === undefined ? 'Bind this table to a query' : 'No rows'}
+          <div className="flex h-24 items-center justify-center px-3 text-center text-sm text-slate-400">
+            {sourceError ? <span className="text-red-600">{sourceError}</span> : configured ? 'No rows' : emptyRowHint(properties)}
           </div>
         )}
       </div>
@@ -576,14 +585,7 @@ export const tableWidget: RegisteredWidget = {
       {
         name: 'Data',
         properties: [
-          {
-            key: 'data',
-            label: 'Table data',
-            control: 'code',
-            expectedType: 'array',
-            bindable: true,
-            helpText: 'A query such as {{ GetOrders.data }}, or a JSON array pasted in.',
-          },
+          ...ROW_SOURCE_PROPERTIES,
           { key: 'columns', label: 'Columns', control: 'column_config', expectedType: 'array', bindable: false },
           {
             key: 'rowKey',

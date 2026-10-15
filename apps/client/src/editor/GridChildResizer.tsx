@@ -1,30 +1,50 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { WidgetDsl } from '@swiftly/shared';
+import { MIN_CELL_HEIGHT, cellRect } from './gridCells';
 
 /**
  * Resize handles for a widget sitting in a Grid cell.
  *
- * A Grid child has no coordinates to drag — it occupies cells — so the ordinary
- * canvas handles do not apply to it. Without something here the only way to make
- * a child taller is to find `Row span` in the property panel, which is a strange
- * thing to have to do to a box you are looking at.
- *
- * These handles drag in pixels and commit in cells: the pointer moves freely, the
- * span snaps to whole cells, and the preview shows which span it will land on.
- * Every edge and corner is live so shrinking from the top or expanding from the
- * left is the same gesture as on the page canvas.
+ * Drag is in pixels; the commit is in cells. The preview snaps to column and
+ * row tracks so a control grows by whole cells, not free-form coordinates.
  */
 
 interface DragState {
+  pointerId: number;
   startX: number;
   startY: number;
+  startCol: number;
+  startRow: number;
   startColSpan: number;
   startRowSpan: number;
   columnUnit: number;
   rowUnit: number;
-  maxColSpan: number;
+  minRowHeight: number;
+  rowGap: number;
+  columns: number;
+  startHeight: number;
+  cell: HTMLElement;
+  grid: HTMLElement;
+  originColumn: string;
+  originRow: string;
+  originTemplate: string;
+  startTracks: number[];
+  edges: Edges;
+  latest: Placement;
+  move: (event: PointerEvent) => void;
+  up: (event: PointerEvent) => void;
 }
+
+interface Placement {
+  col: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+  heightPx: number;
+}
+
+const HEIGHT_SNAP = 4;
 
 type Edges = { n?: boolean; s?: boolean; e?: boolean; w?: boolean };
 
@@ -44,17 +64,111 @@ const HANDLES: { position: HandlePosition; edges: Edges }[] = [
 export function GridChildResizer({
   child,
   selected = false,
+  columns = 3,
   onCommit,
   children,
 }: {
   child: WidgetDsl;
   selected?: boolean;
-  onCommit: (patch: { colSpan?: number; rowSpan?: number }) => void;
+  columns?: number;
+  onCommit: (patch: Omit<Placement, 'heightPx'> & { heightPx: number | null }) => void;
   children: React.ReactNode;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
-  const [preview, setPreview] = useState<{ colSpan: number; rowSpan: number } | null>(null);
+  const [preview, setPreview] = useState<Placement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      document.removeEventListener('pointermove', drag.move, true);
+      document.removeEventListener('pointerup', drag.up, true);
+      document.removeEventListener('pointercancel', drag.up, true);
+    };
+  }, []);
+
+  const applyPlacement = (drag: DragState, next: Placement): void => {
+    drag.cell.style.gridColumn = `${next.col + 1} / span ${next.colSpan}`;
+    drag.cell.style.gridRow = `${next.row + 1} / span ${next.rowSpan}`;
+
+    const tracks = drag.startTracks.slice();
+    while (tracks.length < next.row + next.rowSpan) tracks.push(drag.minRowHeight);
+    const perRow = next.heightPx / next.rowSpan;
+    for (let row = next.row; row < next.row + next.rowSpan; row += 1) {
+      tracks[row] = perRow;
+    }
+    drag.grid.style.gridTemplateRows = tracks.map((height) => `${height}px`).join(' ');
+  };
+
+  const placementFromPointer = (clientX: number, clientY: number, drag: DragState): Placement => {
+    const next: Placement = {
+      col: drag.startCol,
+      row: drag.startRow,
+      colSpan: drag.startColSpan,
+      rowSpan: drag.startRowSpan,
+      heightPx: drag.startHeight,
+    };
+
+    if (drag.edges.e && drag.columnUnit > 0) {
+      next.colSpan = clamp(
+        drag.startColSpan + Math.round((clientX - drag.startX) / drag.columnUnit),
+        1,
+        drag.columns - drag.startCol,
+      );
+    }
+
+    if (drag.edges.w && drag.columnUnit > 0) {
+      const delta = Math.round((drag.startX - clientX) / drag.columnUnit);
+      next.col = clamp(drag.startCol - delta, 0, drag.startCol + drag.startColSpan - 1);
+      next.colSpan = drag.startColSpan + (drag.startCol - next.col);
+    }
+
+    if ((drag.edges.s || drag.edges.n) && drag.rowUnit > 0) {
+      const signed = drag.edges.s ? clientY - drag.startY : drag.startY - clientY;
+      next.heightPx = snapHeight(Math.max(MIN_CELL_HEIGHT, drag.startHeight + signed));
+      next.rowSpan =
+        next.heightPx < drag.minRowHeight
+          ? 1
+          : Math.max(1, Math.round(next.heightPx / drag.minRowHeight));
+      if (drag.edges.n && !drag.edges.s) {
+        const bottom = drag.startRow + drag.startRowSpan;
+        next.row = Math.max(0, bottom - next.rowSpan);
+      }
+    }
+
+    return next;
+  };
+
+  const finish = (): void => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+
+    document.removeEventListener('pointermove', drag.move, true);
+    document.removeEventListener('pointerup', drag.up, true);
+    document.removeEventListener('pointercancel', drag.up, true);
+
+    const current = drag.latest;
+    const changed =
+      current.col !== drag.startCol ||
+      current.row !== drag.startRow ||
+      current.colSpan !== drag.startColSpan ||
+      current.rowSpan !== drag.startRowSpan ||
+      Math.abs(current.heightPx - drag.startHeight) >= HEIGHT_SNAP;
+    if (changed) {
+      const heightPx =
+        Math.abs(current.heightPx - current.rowSpan * drag.minRowHeight) <= HEIGHT_SNAP
+          ? null
+          : current.heightPx;
+      onCommit({ ...current, heightPx });
+    } else {
+      drag.cell.style.gridColumn = drag.originColumn;
+      drag.cell.style.gridRow = drag.originRow;
+      drag.grid.style.gridTemplateRows = drag.originTemplate;
+    }
+    setPreview(null);
+  };
 
   const begin = (event: React.PointerEvent, edges: Edges): void => {
     event.preventDefault();
@@ -63,12 +177,10 @@ export function GridChildResizer({
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
 
-    // The handles sit a couple of elements inside the cell, so walk up to the
-    // grid itself rather than assuming how deep the selection chrome nests.
     let cell: HTMLElement = wrapper;
     let grid: HTMLElement | null = null;
     for (let node = wrapper.parentElement; node; node = node.parentElement) {
-      if (getComputedStyle(node).display === 'grid') {
+      if (node.dataset.gridLayout === 'true') {
         grid = node;
         break;
       }
@@ -76,90 +188,87 @@ export function GridChildResizer({
     }
     if (!grid) return;
 
-    const gridStyle = getComputedStyle(grid);
-    const tracks = gridStyle.gridTemplateColumns.split(' ').filter(Boolean);
-    const columnGap = parseFloat(gridStyle.columnGap) || 0;
-    const rowGap = parseFloat(gridStyle.rowGap) || 0;
-
-    const startColSpan = Math.max(1, Number(child.properties.colSpan ?? 1));
-    const startRowSpan = Math.max(1, Number(child.properties.rowSpan ?? 1));
-    const rect = cell.getBoundingClientRect();
-
-    dragRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      startColSpan,
-      startRowSpan,
-      // One column plus its gap, derived from the track list rather than assumed,
-      // so an uneven or collapsed grid still measures correctly.
-      columnUnit: (parseFloat(tracks[0] ?? '0') || rect.width) + columnGap,
-      // Rows can be content-sized, so a row's height is inferred from what this
-      // child currently occupies rather than from a fixed setting.
-      rowUnit: (rect.height + rowGap) / startRowSpan,
-      maxColSpan: tracks.length,
-    };
-
-    setPreview({ colSpan: startColSpan, rowSpan: startRowSpan });
-    (event.target as Element).setPointerCapture(event.pointerId);
+    const gridColumns = Math.max(1, Number(grid.dataset.gridColumns ?? columns));
+    const columnGap = Number(grid.dataset.gridColumnGap ?? 0);
+    const rowGap = Number(grid.dataset.gridRowGap ?? 0);
+    const minRowHeight = Number(grid.dataset.gridMinRowHeight ?? 72);
+    const start = cellRect(child, gridColumns);
+    const gridWidth = grid.getBoundingClientRect().width;
+    const columnTrack = Math.max(1, (gridWidth - columnGap * (gridColumns - 1)) / gridColumns);
+    const startTracks = parseRowHeights(grid.dataset.gridRowHeights, minRowHeight, start.row + start.rowSpan);
+    const startHeight = Math.max(
+      MIN_CELL_HEIGHT,
+      startTracks.slice(start.row, start.row + start.rowSpan).reduce((total, height) => total + height, 0) ||
+        cell.getBoundingClientRect().height - Math.max(0, start.rowSpan - 1) * rowGap,
+    );
 
     const move = (moveEvent: PointerEvent): void => {
       const drag = dragRef.current;
-      if (!drag) return;
-
-      const next = { colSpan: drag.startColSpan, rowSpan: drag.startRowSpan };
-
-      if (edges.e && drag.columnUnit > 0) {
-        next.colSpan = clamp(
-          drag.startColSpan + Math.round((moveEvent.clientX - drag.startX) / drag.columnUnit),
-          1,
-          drag.maxColSpan,
-        );
-      }
-      if (edges.w && drag.columnUnit > 0) {
-        next.colSpan = clamp(
-          drag.startColSpan + Math.round((drag.startX - moveEvent.clientX) / drag.columnUnit),
-          1,
-          drag.maxColSpan,
-        );
-      }
-      if (edges.s && drag.rowUnit > 0) {
-        next.rowSpan = Math.max(
-          1,
-          drag.startRowSpan + Math.round((moveEvent.clientY - drag.startY) / drag.rowUnit),
-        );
-      }
-      if (edges.n && drag.rowUnit > 0) {
-        next.rowSpan = Math.max(
-          1,
-          drag.startRowSpan + Math.round((drag.startY - moveEvent.clientY) / drag.rowUnit),
-        );
-      }
-
+      if (!drag || moveEvent.pointerId !== drag.pointerId) return;
+      const next = placementFromPointer(moveEvent.clientX, moveEvent.clientY, drag);
+      drag.latest = next;
+      applyPlacement(drag, next);
       setPreview(next);
     };
 
-    const finish = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-
+    const up = (upEvent: PointerEvent): void => {
       const drag = dragRef.current;
-      dragRef.current = null;
-
-      setPreview((current) => {
-        if (current && drag) {
-          const patch: { colSpan?: number; rowSpan?: number } = {};
-          if (current.colSpan !== drag.startColSpan) patch.colSpan = current.colSpan;
-          if (current.rowSpan !== drag.startRowSpan) patch.rowSpan = current.rowSpan;
-          // Only commit a real change, so a click that happens to land on a handle
-          // does not write a no-op into the document history.
-          if (patch.colSpan !== undefined || patch.rowSpan !== undefined) onCommit(patch);
-        }
-        return null;
-      });
+      if (!drag || upEvent.pointerId !== drag.pointerId) return;
+      finish();
     };
 
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startCol: start.col,
+      startRow: start.row,
+      startColSpan: start.colSpan,
+      startRowSpan: start.rowSpan,
+      columnUnit: columnTrack + columnGap,
+      rowUnit: minRowHeight + rowGap,
+      minRowHeight,
+      rowGap,
+      columns: gridColumns,
+      startHeight,
+      cell,
+      grid,
+      originColumn: cell.style.gridColumn,
+      originRow: cell.style.gridRow,
+      originTemplate: grid.style.gridTemplateRows,
+      startTracks,
+      edges,
+      latest: { ...start, heightPx: startHeight },
+      move,
+      up,
+    };
+
+    setPreview({ ...start, heightPx: startHeight });
+    try {
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic tests and some browsers reject capture; document listeners still drive the drag.
+    }
+    document.addEventListener('pointermove', move, true);
+    document.addEventListener('pointerup', up, true);
+    document.addEventListener('pointercancel', up, true);
+  };
+
+  const onHandlePointerMove = (event: React.PointerEvent): void => {
+    const drag = dragRef.current;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    event.stopPropagation();
+    const next = placementFromPointer(event.clientX, event.clientY, drag);
+    drag.latest = next;
+    applyPlacement(drag, next);
+    setPreview(next);
+  };
+
+  const onHandlePointerUp = (event: React.PointerEvent): void => {
+    const drag = dragRef.current;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    event.stopPropagation();
+    finish();
   };
 
   return (
@@ -172,42 +281,47 @@ export function GridChildResizer({
           position={handle.position}
           selected={selected}
           onPointerDown={(event) => begin(event, handle.edges)}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
         />
       ))}
 
       {preview && (
         <span className="pointer-events-none absolute right-1 bottom-1 z-30 rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-medium text-white tabular-nums">
-          {preview.colSpan} × {preview.rowSpan}
+          {preview.colSpan} × {Math.round(preview.heightPx)}px
         </span>
       )}
     </div>
   );
 }
 
-/**
- * A handle is a hit area first and a mark second.
- *
- * Edges stay faint until the cell is hovered or selected; corners keep a square
- * so the grip is obvious. The hit area is larger than the mark so shrinking
- * does not require pixel-accurate aiming.
- */
 function Handle({
   position,
   selected,
   onPointerDown,
+  onPointerMove,
+  onPointerUp,
 }: {
   position: HandlePosition;
   selected: boolean;
   onPointerDown: (event: React.PointerEvent) => void;
+  onPointerMove: (event: React.PointerEvent) => void;
+  onPointerUp: (event: React.PointerEvent) => void;
 }) {
   const corner = position.length === 2;
 
   return (
     <span
+      role={selected ? 'slider' : undefined}
+      aria-label={selected ? `Resize ${position}` : undefined}
+      aria-hidden={!selected}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
       onClick={(event) => event.stopPropagation()}
       className={clsx(
-        'absolute z-20',
+        'no-drag absolute z-50 touch-none',
         visibleClass(selected),
         HANDLE_BOX[position],
         HANDLE_CURSOR[position],
@@ -217,9 +331,9 @@ function Handle({
         className={clsx(
           'block',
           corner
-            ? 'h-2 w-2 rounded-sm border border-blue-600 bg-white'
-            : 'rounded-full bg-blue-500/70',
-          !corner && EDGE_MARK[position],
+            ? 'h-2.5 w-2.5 rounded-sm border-2 border-blue-600 bg-white shadow-sm'
+            : 'rounded-full bg-blue-500',
+          !corner && EDGE_MARK[position as 'n' | 's' | 'e' | 'w'],
         )}
       />
     </span>
@@ -228,19 +342,19 @@ function Handle({
 
 function visibleClass(selected: boolean): string {
   return selected
-    ? 'opacity-100'
-    : 'opacity-0 transition-opacity group-hover/cell:opacity-100';
+    ? 'pointer-events-auto opacity-100'
+    : 'pointer-events-none opacity-0 transition-opacity group-hover/cell:pointer-events-auto group-hover/cell:opacity-100';
 }
 
 const HANDLE_BOX: Record<HandlePosition, string> = {
-  n: 'top-[-4px] right-3 left-3 flex h-2.5 items-center justify-center',
-  s: 'right-3 bottom-[-4px] left-3 flex h-2.5 items-center justify-center',
-  e: 'top-3 right-[-4px] bottom-3 flex w-2.5 items-center justify-center',
-  w: 'top-3 bottom-3 left-[-4px] flex w-2.5 items-center justify-center',
-  ne: 'top-[-5px] right-[-5px] flex h-3.5 w-3.5 items-center justify-center',
-  nw: 'top-[-5px] left-[-5px] flex h-3.5 w-3.5 items-center justify-center',
-  se: 'right-[-5px] bottom-[-5px] flex h-3.5 w-3.5 items-center justify-center',
-  sw: 'bottom-[-5px] left-[-5px] flex h-3.5 w-3.5 items-center justify-center',
+  n: 'top-[-6px] right-4 left-4 flex h-3.5 items-center justify-center',
+  s: 'right-4 bottom-[-6px] left-4 flex h-3.5 items-center justify-center',
+  e: 'top-4 right-[-6px] bottom-4 flex w-3.5 items-center justify-center',
+  w: 'top-4 bottom-4 left-[-6px] flex w-3.5 items-center justify-center',
+  ne: 'top-[-7px] right-[-7px] flex h-4 w-4 items-center justify-center',
+  nw: 'top-[-7px] left-[-7px] flex h-4 w-4 items-center justify-center',
+  se: 'right-[-7px] bottom-[-7px] flex h-4 w-4 items-center justify-center',
+  sw: 'bottom-[-7px] left-[-7px] flex h-4 w-4 items-center justify-center',
 };
 
 const HANDLE_CURSOR: Record<HandlePosition, string> = {
@@ -255,12 +369,26 @@ const HANDLE_CURSOR: Record<HandlePosition, string> = {
 };
 
 const EDGE_MARK: Record<'n' | 's' | 'e' | 'w', string> = {
-  n: 'h-0.5 w-full',
-  s: 'h-0.5 w-full',
-  e: 'h-full w-0.5',
-  w: 'h-full w-0.5',
+  n: 'h-1 w-full',
+  s: 'h-1 w-full',
+  e: 'h-full w-1',
+  w: 'h-full w-1',
 };
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function snapHeight(value: number): number {
+  return Math.max(MIN_CELL_HEIGHT, Math.round(value / HEIGHT_SNAP) * HEIGHT_SNAP);
+}
+
+function parseRowHeights(raw: string | undefined, fallback: number, minCount: number): number[] {
+  const parsed = (raw ?? '')
+    .split(',')
+    .map((part) => Number(part))
+    .filter((height) => Number.isFinite(height) && height > 0);
+  const tracks = parsed.length > 0 ? parsed : [];
+  while (tracks.length < Math.max(1, minCount)) tracks.push(fallback);
+  return tracks;
 }

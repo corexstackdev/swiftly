@@ -2,13 +2,14 @@ import { useEffect, useMemo } from 'react';
 import clsx from 'clsx';
 import type { WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetHost, WidgetProps } from './types';
-import { clampToBounds, mergeFieldRules, validate } from './validation';
+import { clampToBounds, constrainNumeric, mergeFieldRules, validate } from './validation';
 import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';
 
 /** Controls whose `value` a Form collects. Anything else is layout or display. */
 const FIELD_TYPES = new Set([
   'input',
   'number_input',
+  'currency_input',
   'select',
   'date_picker',
   'checkbox',
@@ -196,7 +197,9 @@ function evaluateFields(
     const stored = host.widgetState?.[field.name] ?? {};
     let value =
       stored.value !== undefined ? stored.value : defaultFieldValue(field.type, props.defaultValue);
-    if (field.type === 'number_input') {
+    if (field.type === 'currency_input') {
+      value = constrainNumeric(value, props);
+    } else if (field.type === 'number_input') {
       value = clampToBounds(value, props);
     }
     data[field.name] = value;

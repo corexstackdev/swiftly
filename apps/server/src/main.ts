@@ -18,7 +18,9 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
   const clientUrl = config.get<string>('CLIENT_URL', 'http://localhost:5173');
 
-  await app.register(cookie, { secret: config.getOrThrow<string>('SESSION_SECRET') });
+  // Tokens are JWTs, already signed with SESSION_SECRET. Passing that secret
+  // here would make @fastify/cookie try to unsign them as its own HMAC cookies.
+  await app.register(cookie);
   await app.register(helmet, {
     // Published apps render tenant-authored content; the runtime sets its own CSP
     // per response, so the global default stays off here.

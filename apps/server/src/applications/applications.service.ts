@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import type { ApplicationDsl } from '@swiftly/shared';
 import { DSL_VERSION } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
@@ -97,13 +97,17 @@ export class ApplicationsService {
     if (!application) throw new NotFoundException('Application not found');
 
     if (application.draftRevision !== expectedRevision) {
-      throw new ConflictException({
-        message:
-          'This application was changed by someone else since you loaded it. ' +
-          'Reload to get the latest version before saving.',
-        currentRevision: application.draftRevision,
-        yourRevision: expectedRevision,
-      });
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.CONFLICT,
+          message:
+            'This application was changed by someone else since you loaded it. ' +
+            'Reload to get the latest version before saving.',
+          currentRevision: application.draftRevision,
+          yourRevision: expectedRevision,
+        },
+        HttpStatus.CONFLICT,
+      );
     }
 
     const updated = await this.prisma.application.update({

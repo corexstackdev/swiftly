@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import type {
-  ApplicationDsl,
-  PropertyDefinition,
-  ValidationRule,
-  WidgetDsl,
+import {
+  jsObjectsOnPage,
+  type ApplicationDsl,
+  type PropertyDefinition,
+  type ValidationRule,
+  type WidgetDsl,
 } from '@swiftly/shared';
 import { getWidgetDefinition } from '@/widgets/registry';
 import { TabListEditor, normaliseTabs } from './TabListEditor';
@@ -12,6 +13,8 @@ import { SpacingEditor } from './SpacingEditor';
 import { ColumnConfigEditor } from './ColumnConfigEditor';
 import { asRows } from '@/widgets/coerce';
 import { Select, control, controlCompact, dashedButton, ghostButton } from './controls';
+import { jsCallBinding, listJsFunctions, pathFromJsCall } from './jsObjectOps';
+import { gridCanvasScale } from './gridCells';
 
 /**
  * The property panel.
@@ -26,8 +29,10 @@ export function PropertyPanel({
   widget,
   parent,
   dsl,
+  pageId,
   evaluated,
   onChange,
+  onLayout,
   onRename,
   onDelete,
 }: {
@@ -35,8 +40,17 @@ export function PropertyPanel({
   /** The container holding this widget, if any. Drives layout-slot properties. */
   parent: WidgetDsl | null;
   dsl: ApplicationDsl;
+  pageId: string;
   evaluated: Record<string, { value: unknown; error?: { message: string } }>;
   onChange: (key: string, value: unknown) => void;
+  /** Page-canvas size of the selected widget, used for Grid 1× / 2× / 3×. */
+  onLayout?: (patch: {
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    canvasSize?: number;
+  }) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
 }) {
@@ -63,8 +77,10 @@ export function PropertyPanel({
       parent={parent}
       definition={definition}
       dsl={dsl}
+      pageId={pageId}
       evaluated={evaluated}
       onChange={onChange}
+      onLayout={onLayout}
       onRename={onRename}
       onDelete={onDelete}
     />
@@ -79,8 +95,10 @@ function PropertyPanelBody({
   parent,
   definition,
   dsl,
+  pageId,
   evaluated,
   onChange,
+  onLayout,
   onRename,
   onDelete,
 }: {
@@ -88,8 +106,16 @@ function PropertyPanelBody({
   parent: WidgetDsl | null;
   definition: NonNullable<ReturnType<typeof getWidgetDefinition>>;
   dsl: ApplicationDsl;
+  pageId: string;
   evaluated: Record<string, { value: unknown; error?: { message: string } }>;
   onChange: (key: string, value: unknown) => void;
+  onLayout?: (patch: {
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    canvasSize?: number;
+  }) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
 }) {
@@ -105,10 +131,28 @@ function PropertyPanelBody({
     // The evaluated value when the property is bound, the raw one when a list
     // was pasted in — and through the same coercion the widget uses, so the
     // editor cannot decide there is no data while the table is showing rows.
-    const evaluation = evaluated[`${widget.name}.data`];
-    const rows = asRows(evaluation ? evaluation.value : widget.properties.data);
+    const evaluation =
+      evaluated[`${widget.name}.sourceJs`] ??
+      evaluated[`${widget.name}.sourceData`] ??
+      evaluated[`${widget.name}.data`] ??
+      evaluated[`${widget.name}.options`];
+    const rows = asRows(
+      evaluation
+        ? evaluation.value
+        : (widget.properties.sourceJs ??
+            widget.properties.sourceData ??
+            widget.properties.data ??
+            widget.properties.options),
+    );
     return rows[0] ? Object.keys(rows[0]) : [];
-  }, [evaluated, widget.name, widget.properties.data]);
+  }, [
+    evaluated,
+    widget.name,
+    widget.properties.data,
+    widget.properties.sourceData,
+    widget.properties.sourceJs,
+    widget.properties.options,
+  ]);
 
   const propertyCount = definition.properties.reduce(
     (total, section) => total + section.properties.length,
@@ -160,6 +204,30 @@ function PropertyPanelBody({
           Bind to it as <code className="text-slate-500">{widget.name}.property</code>
         </p>
 
+        <label className="mt-2 flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-slate-600">Id</span>
+          <input value={widget.id} readOnly aria-label="Widget id" className={clsx(control, 'font-mono text-slate-500')} />
+          <span className="text-[11px] text-slate-400">
+            In JavaScript: <code className="text-slate-500">{`document.byId('${widget.id}')`}</code>
+          </span>
+        </label>
+        <label className="mt-2 flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-slate-600">Class</span>
+          <input
+            value={String(widget.properties.className ?? '')}
+            onChange={(event) => onChange('className', event.target.value)}
+            placeholder="my-field"
+            aria-label="Widget class"
+            className={clsx(control, 'font-mono')}
+          />
+          <span className="text-[11px] text-slate-400">
+            In JavaScript:{' '}
+            <code className="text-slate-500">
+              {`document.byClass('${String(widget.properties.className ?? '').trim() || 'my-field'}')`}
+            </code>
+          </span>
+        </label>
+
         <button
           type="button"
           onClick={onDelete}
@@ -196,51 +264,86 @@ function PropertyPanelBody({
       )}
 
       <div className="flex-1 overflow-auto">
+        {widget.type === 'grid' && (
+          <Section title="Size">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-600">Items per row</span>
+              <SizeToggle
+                value={Math.max(1, Number(widget.properties.columns ?? 3))}
+                options={[2, 3]}
+                labels={{ 2: '2 items', 3: '3 items' }}
+                onChange={(columns) => onChange('columns', columns)}
+              />
+              <span className="text-[11px] leading-snug text-slate-400">
+                How many controls sit side by side. A field can still span two or three of those slots.
+              </span>
+            </div>
+            {onLayout && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-slate-600">Canvas size</span>
+                <SizeToggle
+                  value={gridCanvasScale(widget.properties, widget.layout)}
+                  options={[1, 2, 3]}
+                  labels={{ 1: '1×', 2: '2×', 3: '3×' }}
+                  onChange={(scale) =>
+                    onLayout({ ...gridCanvasLayout(widget.layout, scale), canvasSize: scale })
+                  }
+                />
+                <span className="text-[11px] leading-snug text-slate-400">
+                  How large this Grid is on the page. 2× is full width with taller cells; 3× is larger still.
+                </span>
+              </div>
+            )}
+          </Section>
+        )}
+
         {parent?.type === 'grid' && (
           <Section title="Cell">
-            {/* A child's footprint lives on the child, so moving it between
-                containers carries its own sizing with it. */}
-            <div className="grid grid-cols-2 gap-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-slate-600">Column span</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={Number(widget.properties.colSpan ?? 1)}
-                  onChange={(event) => onChange('colSpan', Math.max(1, Number(event.target.value)))}
-                  className={control}
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-slate-600">Row span</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={Number(widget.properties.rowSpan ?? 1)}
-                  onChange={(event) => onChange('rowSpan', Math.max(1, Number(event.target.value)))}
-                  className={control}
-                />
-              </label>
+            <p className="text-[11px] text-slate-400">
+              Drag the handles on the canvas, or pick a size. Pull the bottom edge up to shorten a field.
+            </p>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-600">Width</span>
+              <SizeToggle
+                value={Math.max(1, Number(widget.properties.colSpan ?? 1))}
+                options={widthOptions(parent)}
+                labels={spanLabels(widthOptions(parent))}
+                onChange={(span) => setChildSpan(widget, parent, onChange, 'colSpan', span)}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-600">Height</span>
+              <SizeToggle
+                value={Math.max(1, Number(widget.properties.rowSpan ?? 1))}
+                options={[1, 2, 3]}
+                labels={{ 1: '1×', 2: '2×', 3: '3×' }}
+                onChange={(span) => {
+                  onChange('rowSpan', span);
+                  onChange('heightPx', null);
+                }}
+              />
             </div>
             <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-slate-600">Order</span>
+              <span className="text-[11px] font-medium text-slate-600">Column</span>
               <input
                 type="number"
-                value={widget.properties.order === undefined ? '' : Number(widget.properties.order)}
-                placeholder="as placed"
-                onChange={(event) =>
-                  onChange('order', event.target.value === '' ? undefined : Number(event.target.value))
-                }
+                min={0}
+                max={Math.max(0, Number(parent.properties.columns ?? 3) - 1)}
+                value={Number(widget.properties.col ?? 0)}
+                onChange={(event) => onChange('col', Number(event.target.value))}
                 className={control}
               />
-              <span className="text-[11px] text-slate-400">
-                Lower comes first. Blank keeps the order they were added in.
-              </span>
             </label>
-            <p className="text-[11px] text-slate-400">
-              A span is clamped to the columns actually showing, so a wide tile still fits
-              once the grid collapses.
-            </p>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-600">Row</span>
+              <input
+                type="number"
+                min={0}
+                value={Number(widget.properties.row ?? 0)}
+                onChange={(event) => onChange('row', Number(event.target.value))}
+                className={control}
+              />
+            </label>
           </Section>
         )}
 
@@ -271,9 +374,20 @@ function PropertyPanelBody({
               <PropertyField
                 key={property.key}
                 property={property}
-                value={widget.properties[property.key]}
-                evaluation={evaluated[`${widget.name}.${property.key}`]}
+                value={
+                  widget.properties[property.key] ??
+                  (property.key === 'sourceData'
+                    ? (widget.properties.options ?? widget.properties.data)
+                    : undefined)
+                }
+                evaluation={
+                  evaluated[`${widget.name}.${property.key}`] ??
+                  (property.key === 'sourceData'
+                    ? (evaluated[`${widget.name}.options`] ?? evaluated[`${widget.name}.data`])
+                    : undefined)
+                }
                 dsl={dsl}
+                pageId={pageId}
                 dataKeys={dataKeys}
                 onChange={(value) => onChange(property.key, value)}
               />
@@ -302,6 +416,84 @@ function PropertyPanelBody({
           </Section>
         )}
       </div>
+    </div>
+  );
+}
+
+const PAGE_COLUMNS = 24;
+const GRID_BASE = { w: 12, h: 10 };
+
+function gridCanvasLayout(
+  layout: { x: number; y: number; w: number; h: number },
+  scale: number,
+): { x: number; w: number; h: number } {
+  const w = scale === 1 ? GRID_BASE.w : PAGE_COLUMNS;
+  const h = GRID_BASE.h * scale;
+  return { x: Math.min(layout.x, PAGE_COLUMNS - w), w, h };
+}
+
+function widthOptions(parent: WidgetDsl): number[] {
+  const columns = Math.max(1, Number(parent.properties.columns ?? 3));
+  const options = [1, 2, 3].filter((span) => span <= columns);
+  if (!options.includes(columns)) options.push(columns);
+  return options;
+}
+
+function spanLabels(options: number[]): Record<number, string> {
+  return Object.fromEntries(options.map((span) => [span, `${span}×`]));
+}
+
+function setChildSpan(
+  widget: WidgetDsl,
+  parent: WidgetDsl,
+  onChange: (key: string, value: unknown) => void,
+  key: 'colSpan' | 'rowSpan',
+  span: number,
+): void {
+  if (key === 'rowSpan') {
+    onChange('rowSpan', span);
+    return;
+  }
+
+  const columns = Math.max(1, Number(parent.properties.columns ?? 3));
+  const nextSpan = Math.max(1, Math.min(span, columns));
+  const col = Number(widget.properties.col ?? 0);
+  const nextCol = Math.min(col, columns - nextSpan);
+  onChange('colSpan', nextSpan);
+  if (nextCol !== col) onChange('col', nextCol);
+}
+
+function SizeToggle({
+  value,
+  options,
+  labels,
+  onChange,
+}: {
+  value: number;
+  options: number[];
+  labels: Record<number, string>;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+      {options.map((option) => {
+        const active = value === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            className={clsx(
+              'rounded border px-2 py-1.5 text-xs font-medium transition-colors',
+              active
+                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50',
+            )}
+          >
+            {labels[option] ?? `${option}×`}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -350,6 +542,7 @@ function PropertyField({
   value,
   evaluation,
   dsl,
+  pageId,
   dataKeys,
   onChange,
 }: {
@@ -357,6 +550,7 @@ function PropertyField({
   value: unknown;
   evaluation?: { value: unknown; error?: { message: string } };
   dsl: ApplicationDsl;
+  pageId: string;
   /** Column names from the widget's bound data, for the column editor. */
   dataKeys: string[];
   onChange: (value: unknown) => void;
@@ -374,7 +568,7 @@ function PropertyField({
     JSON.stringify(value) !== JSON.stringify(property.defaultValue);
 
   return (
-    <label className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1">
       <span className="flex items-center gap-1.5">
         <span className="text-[11px] font-medium text-slate-600">{property.label}</span>
 
@@ -395,8 +589,6 @@ function PropertyField({
             type="button"
             title={`Reset ${property.label} to its default`}
             onClick={(event) => {
-              // The label wraps the control, so a click here would otherwise
-              // land on the field and move the caret instead of resetting.
               event.preventDefault();
               onChange(property.defaultValue);
             }}
@@ -411,6 +603,7 @@ function PropertyField({
         property={property}
         value={value}
         dsl={dsl}
+        pageId={pageId}
         dataKeys={dataKeys}
         onChange={onChange}
       />
@@ -431,7 +624,7 @@ function PropertyField({
           {evaluation.error ? evaluation.error.message : preview(evaluation.value)}
         </div>
       )}
-    </label>
+    </div>
   );
 }
 
@@ -439,12 +632,14 @@ function Control({
   property,
   value,
   dsl,
+  pageId,
   dataKeys,
   onChange,
 }: {
   property: PropertyDefinition;
   value: unknown;
   dsl: ApplicationDsl;
+  pageId: string;
   dataKeys: string[];
   onChange: (value: unknown) => void;
 }) {
@@ -494,14 +689,14 @@ function Control({
       // The definition's own options win. SELECT_OPTIONS is the fallback for the
       // built-ins that predate the field, and is what a custom component cannot
       // add to.
-      const options =
+      const options: { value: string; label: string; disabled?: boolean }[] =
         property.options ??
         (SELECT_OPTIONS[property.key] ?? []).map((option) => ({ value: option, label: option }));
 
       return (
-        <Select value={String(value ?? '')} onChange={onChange}>
+        <Select value={String(value ?? property.defaultValue ?? '')} onChange={onChange}>
           {options.map((option) => (
-            <option key={option.value} value={option.value}>
+            <option key={option.value} value={option.value} disabled={option.disabled}>
               {option.label}
             </option>
           ))}
@@ -521,6 +716,17 @@ function Control({
         </Select>
       );
 
+    case 'js_function':
+      return (
+        <JsFunctionPicker
+          value={value}
+          pageId={pageId}
+          dsl={dsl}
+          placeholder={property.placeholder}
+          onChange={onChange}
+        />
+      );
+
     case 'textarea':
     case 'code':
     case 'json':
@@ -528,6 +734,7 @@ function Control({
         <textarea
           rows={property.control === 'textarea' ? 2 : 4}
           value={typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value, null, 2)}
+          placeholder={property.placeholder}
           onChange={(event) => onChange(event.target.value)}
           className={clsx(control, 'resize-y font-mono leading-snug')}
           spellCheck={false}
@@ -549,7 +756,7 @@ function Control({
       );
 
     case 'action_list':
-      return <ActionEditor actions={value} dsl={dsl} onChange={onChange} />;
+      return <ActionEditor actions={value} dsl={dsl} pageId={pageId} onChange={onChange} />;
 
     default:
       return (
@@ -567,7 +774,7 @@ const SELECT_OPTIONS: Record<string, string[]> = {
   variant: ['primary', 'secondary', 'danger', 'body', 'heading', 'subheading', 'caption'],
   align: ['left', 'center', 'right'],
   inputType: ['text', 'password', 'email', 'number', 'tel', 'date'],
-  labelDisplay: ['text', 'icon', 'icon_text'],
+  labelDisplay: ['text', 'icon', 'icon_text', 'hidden'],
   rowMode: ['auto', 'fixed'],
   alignItems: ['stretch', 'start', 'center', 'end'],
   justifyItems: ['stretch', 'start', 'center', 'end'],
@@ -579,6 +786,62 @@ const SELECT_OPTIONS: Record<string, string[]> = {
   format: ['plain', 'currency', 'percent'],
   chartType: ['bar', 'line', 'area', 'pie'],
 };
+
+function JsFunctionPicker({
+  value,
+  pageId,
+  dsl,
+  placeholder,
+  onChange,
+}: {
+  value: unknown;
+  pageId: string;
+  dsl: ApplicationDsl;
+  placeholder?: string;
+  onChange: (value: unknown) => void;
+}) {
+  const functions = listJsFunctions(jsObjectsOnPage(dsl.jsObjects, pageId));
+  const selected = pathFromJsCall(value);
+  const groups = new Map<string, typeof functions>();
+  for (const fn of functions) {
+    const group = groups.get(fn.objectName) ?? [];
+    group.push(fn);
+    groups.set(fn.objectName, group);
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Select
+        value={selected}
+        onChange={(path) => onChange(path ? jsCallBinding(path) : '')}
+      >
+        <option value="">Choose a function…</option>
+        {[...groups.entries()].map(([objectName, entries]) => (
+          <optgroup key={objectName} label={objectName}>
+            {entries.map((entry) => (
+              <option key={entry.path} value={entry.path}>
+                {entry.functionName}()
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </Select>
+      <textarea
+        rows={2}
+        value={typeof value === 'string' ? value : ''}
+        placeholder={placeholder ?? '{{ Utils.getOptions() }}'}
+        onChange={(event) => onChange(event.target.value)}
+        className={clsx(control, 'resize-y font-mono leading-snug')}
+        spellCheck={false}
+      />
+      {functions.length === 0 && (
+        <span className="text-[11px] text-slate-400">
+          Create a JS object on this page, export a function that returns the options, then pick it here.
+        </span>
+      )}
+    </div>
+  );
+}
 
 function ValidationEditor({
   rules,
@@ -672,99 +935,149 @@ const NEEDS_VALUE = new Set(['minLength', 'maxLength', 'min', 'max', 'regex', 'c
 function ActionEditor({
   actions,
   dsl,
+  pageId,
   onChange,
 }: {
   actions: unknown;
   dsl: ApplicationDsl;
+  pageId: string;
   onChange: (actions: unknown) => void;
 }) {
   const list = Array.isArray(actions) ? (actions as Record<string, unknown>[]) : [];
+  const jsFunctions = listJsFunctions(jsObjectsOnPage(dsl.jsObjects, pageId));
 
   return (
     <div className="no-drag flex flex-col gap-1.5">
       {list.map((action, index) => (
-        <div key={index} className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50/60 p-1.5">
-          <Select
-            value={String(action.type ?? 'runQuery')}
-            onChange={(selected) => {
-              const next = [...list];
-              next[index] = { type: selected };
-              onChange(next);
-            }}
-            compact
-          >
-            <option value="runQuery">Run query</option>
-            <option value="navigate">Navigate</option>
-            <option value="showNotification">Notify</option>
-            <option value="setState">Set state</option>
-          </Select>
-
-          {action.type === 'runQuery' && (
+        <div key={index} className="flex flex-col gap-1 rounded border border-slate-200 bg-slate-50/60 p-1.5">
+          <div className="flex items-center gap-1">
             <Select
-              value={String(action.queryName ?? '')}
+              value={String(action.type ?? 'runJsFunction')}
               onChange={(selected) => {
                 const next = [...list];
-                next[index] = { ...action, queryName: selected };
+                next[index] = { type: selected };
                 onChange(next);
               }}
               compact
-              className="min-w-0"
             >
-              <option value="">Select a query</option>
-              {dsl.queries.map((query) => (
-                <option key={query.id} value={query.name}>
-                  {query.name}
-                </option>
-              ))}
+              <option value="runJsFunction">Run JS function</option>
+              <option value="runJs">Run JS</option>
+              <option value="runQuery">Run query</option>
+              <option value="navigate">Navigate</option>
+              <option value="showNotification">Notify</option>
+              <option value="setState">Set state</option>
             </Select>
+
+            {action.type === 'runQuery' && (
+              <Select
+                value={String(action.queryName ?? '')}
+                onChange={(selected) => {
+                  const next = [...list];
+                  next[index] = { ...action, queryName: selected };
+                  onChange(next);
+                }}
+                compact
+                className="min-w-0"
+              >
+                <option value="">Select a query</option>
+                {dsl.queries.map((query) => (
+                  <option key={query.id} value={query.name}>
+                    {query.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+
+            {action.type === 'runJsFunction' && (
+              <Select
+                value={String(action.path ?? '')}
+                onChange={(selected) => {
+                  const next = [...list];
+                  next[index] = { ...action, path: selected };
+                  onChange(next);
+                }}
+                compact
+                className="min-w-0"
+              >
+                <option value="">Choose a function…</option>
+                {jsFunctions.map((entry) => (
+                  <option key={entry.path} value={entry.path}>
+                    {entry.path}()
+                  </option>
+                ))}
+              </Select>
+            )}
+
+            {action.type === 'navigate' && (
+              <Select
+                value={String((action.to as { pageId?: string })?.pageId ?? '')}
+                onChange={(selected) => {
+                  const next = [...list];
+                  next[index] = { ...action, to: { kind: 'page', pageId: selected } };
+                  onChange(next);
+                }}
+                compact
+                className="min-w-0"
+              >
+                <option value="">Select a page</option>
+                {dsl.pages.map((page) => (
+                  <option key={page.id} value={page.id}>
+                    {page.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+
+            {action.type === 'showNotification' && (
+              <input
+                value={String(action.message ?? '')}
+                onChange={(event) => {
+                  const next = [...list];
+                  next[index] = { ...action, message: event.target.value, variant: action.variant ?? 'success' };
+                  onChange(next);
+                }}
+                placeholder="Message"
+                className={clsx(controlCompact, 'min-w-0 flex-1')}
+              />
+            )}
+
+            <button
+              type="button"
+              onClick={() => onChange(list.filter((_, i) => i !== index))}
+              className={clsx(ghostButton, 'shrink-0 hover:bg-red-50 hover:text-red-600')}
+            >
+              ×
+            </button>
+          </div>
+
+          {action.type === 'runJsFunction' && (
+            <span className="text-[11px] text-slate-400">
+              {jsFunctions.length === 0
+                ? 'Create a JS object, export a function, then pick it here.'
+                : 'The function receives event (source id, name, class, value). Find a control with document.byId(id) or document.byClass(class), then read or set .value.'}
+            </span>
           )}
 
-          {action.type === 'navigate' && (
-            <Select
-              value={String((action.to as { pageId?: string })?.pageId ?? '')}
-              onChange={(selected) => {
-                const next = [...list];
-                next[index] = { ...action, to: { kind: 'page', pageId: selected } };
-                onChange(next);
-              }}
-              compact
-              className="min-w-0"
-            >
-              <option value="">Select a page</option>
-              {dsl.pages.map((page) => (
-                <option key={page.id} value={page.id}>
-                  {page.name}
-                </option>
-              ))}
-            </Select>
-          )}
-
-          {action.type === 'showNotification' && (
-            <input
-              value={String(action.message ?? '')}
+          {action.type === 'runJs' && (
+            <textarea
+              rows={3}
+              value={String(action.code ?? '')}
+              placeholder={"document.byId('w_input').value = event.source.value;\n// document.byClass('totals')[0].disabled = false"}
               onChange={(event) => {
                 const next = [...list];
-                next[index] = { ...action, message: event.target.value, variant: action.variant ?? 'success' };
+                next[index] = { ...action, code: event.target.value };
                 onChange(next);
               }}
-              placeholder="Message"
-              className={clsx(controlCompact, "min-w-0 flex-1")}
+              className={clsx(control, 'resize-y font-mono leading-snug')}
+              spellCheck={false}
             />
           )}
-
-          <button
-            type="button"
-            onClick={() => onChange(list.filter((_, i) => i !== index))}
-            className={clsx(ghostButton, "shrink-0 hover:bg-red-50 hover:text-red-600")}
-          >
-            ×
-          </button>
         </div>
       ))}
 
       <button
         type="button"
-        onClick={() => onChange([...list, { type: 'runQuery', queryName: '' }])}
+        onClick={() => onChange([...list, { type: 'runJsFunction', path: '' }])}
         className={dashedButton}
       >
         + Add action

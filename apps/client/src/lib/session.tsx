@@ -31,6 +31,29 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
+  // Access cookies last 15 minutes. Refresh before that so an open editor does
+  // not 401 the next draft save, and again when the tab comes back to the front
+  // after Chrome has frozen background timers.
+  useEffect(() => {
+    if (!user) return;
+
+    const refresh = () => {
+      void api.auth.refresh();
+    };
+    const interval = window.setInterval(refresh, 10 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', refresh);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [user]);
+
   const login = useCallback(async (email: string, password: string) => {
     await api.auth.login(email, password);
     setUser(await api.auth.me());

@@ -115,5 +115,8 @@ const GLOBALS = new Set([
   'undefined', 'null', 'true', 'false', 'NaN', 'Infinity',
   'Math', 'JSON', 'Date', 'Object', 'Array', 'String', 'Number', 'Boolean',
   'parseInt', 'parseFloat', 'isNaN', 'console', 'RegExp', 'Promise', 'Set', 'Map',
-  'page', 'appState', 'currentUser', 'event',
+  'fetch',
+  'page', 'appState', 'currentUser', 'event', 'document',
+  'getElementById', 'getElementByName', 'getElementsByName', 'getElementsByClassName',
+  'querySelector', 'querySelectorAll', 'byId', 'byName', 'byClass',
 ]);

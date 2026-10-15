@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import type { ApplicationDsl, PageDsl } from '@swiftly/shared';
+import { jsObjectsOnPage, type ApplicationDsl, type PageDsl } from '@swiftly/shared';
 import type { DatasourceSummary } from '@/lib/api';
 import { WidgetPalette } from './WidgetPalette';
 import { WidgetTree } from './WidgetTree';
+import { JsObjectMenuButton } from './JsObjectMenu';
 
 /**
  * The entity panel: the one place things get added.
@@ -21,6 +22,7 @@ export function EntityPanel({
   datasources,
   selectedQueryName,
   selectedWidgetId,
+  selectedJsId,
   onSelectQuery,
   onCreateQuery,
   onDeleteQuery,
@@ -28,6 +30,10 @@ export function EntityPanel({
   onDeleteWidget,
   onCreateJsObject,
   onSelectJsObject,
+  onRenameJsObject,
+  onCopyJsObject,
+  onMoveJsObject,
+  onDeleteJsObject,
   onAddWidget,
 }: {
   dsl: ApplicationDsl;
@@ -35,6 +41,7 @@ export function EntityPanel({
   datasources: DatasourceSummary[];
   selectedQueryName: string | null;
   selectedWidgetId: string | null;
+  selectedJsId: string | null;
   onSelectQuery: (name: string | null) => void;
   onCreateQuery: (datasourceId: string) => void;
   onDeleteQuery: (name: string) => void;
@@ -43,12 +50,17 @@ export function EntityPanel({
   onAddWidget: (widgetType: string) => void;
   onDeleteWidget: (widgetId: string) => void;
   onCreateJsObject: () => void;
-  onSelectJsObject: (name: string) => void;
+  onSelectJsObject: (id: string) => void;
+  onRenameJsObject: (id: string, name: string) => void;
+  onCopyJsObject: (id: string, pageId: string) => void;
+  onMoveJsObject: (id: string, pageId: string) => void;
+  onDeleteJsObject: (id: string) => void;
 }) {
   const [tab, setTab] = useState<EntityTab>('ui');
   // The UI tab is the page's structure by default; the palette is what you open
   // to add to it. Once a page has widgets, finding one matters more than adding.
   const [showPalette, setShowPalette] = useState(false);
+  const pageJsObjects = jsObjectsOnPage(dsl.jsObjects, page?.id ?? '');
 
   return (
     <div className="flex h-full flex-col">
@@ -201,21 +213,46 @@ export function EntityPanel({
             </div>
 
             <ul className="flex-1 overflow-auto p-1">
-              {(dsl.jsObjects ?? []).map((jsObject) => (
-                <li key={jsObject.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectJsObject(jsObject.name)}
-                    className="w-full rounded px-2 py-1 text-left text-xs text-slate-700 hover:bg-slate-100"
-                  >
-                    {jsObject.name}
-                  </button>
-                </li>
-              ))}
+              {pageJsObjects.map((jsObject) => {
+                const selected = selectedJsId === jsObject.id;
+                return (
+                  <li key={jsObject.id ?? jsObject.name}>
+                    <div
+                      className={clsx(
+                        'flex items-center gap-0.5 rounded px-1 py-0.5',
+                        selected ? 'bg-blue-50' : 'hover:bg-slate-100',
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => jsObject.id && onSelectJsObject(jsObject.id)}
+                        className={clsx(
+                          'min-w-0 flex-1 rounded px-1 py-1 text-left text-xs',
+                          selected ? 'font-medium text-blue-700' : 'text-slate-700',
+                        )}
+                      >
+                        {jsObject.name}
+                      </button>
+                      {selected && jsObject.id && page && (
+                        <JsObjectMenuButton
+                          jsObject={jsObject}
+                          dsl={dsl}
+                          pages={dsl.pages}
+                          currentPageId={page.id}
+                          onRename={(name) => onRenameJsObject(jsObject.id!, name)}
+                          onCopyToPage={(pageId) => onCopyJsObject(jsObject.id!, pageId)}
+                          onMoveToPage={(pageId) => onMoveJsObject(jsObject.id!, pageId)}
+                          onDelete={() => onDeleteJsObject(jsObject.id!)}
+                        />
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
 
-              {(dsl.jsObjects ?? []).length === 0 && (
+              {pageJsObjects.length === 0 && (
                 <li className="px-2 py-3 text-xs text-slate-400">
-                  Shared helper functions, callable from any binding as{' '}
+                  Helper functions on this page, callable from a binding as{' '}
                   <code className="text-slate-500">Utils.format(x)</code>.
                 </li>
               )}

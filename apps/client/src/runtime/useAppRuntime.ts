@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ActionDsl, ApplicationDsl, EvaluationMap, PageDsl, WidgetDsl } from '@swiftly/shared';
+import {
+  jsObjectsOnPage,
+  type ActionDsl,
+  type ApplicationDsl,
+  type EvaluationMap,
+  type PageDsl,
+  type WidgetDsl,
+} from '@swiftly/shared';
 import { api } from '@/lib/api';
 import { useEvaluation } from '@/evaluation/useEvaluation';
 import {
@@ -11,7 +18,19 @@ import {
   type QueryRuntimeState,
 } from '@/evaluation/dataTree';
 import { evaluateExpression, writePath } from '@/evaluation/evaluateSync';
+import { hydrateJsObjects } from '@/evaluation/jsObjects';
+import {
+  attachJsObjects,
+  callJsFunction,
+  runJsFunction,
+  runJsSource,
+  splitJsFunctionPath,
+} from '@/evaluation/runEventJs';
+import { buildWidgetScope } from './widgetApi';
 import type { SessionUser } from '@/lib/api';
+
+/** Click/submit in the editor selects the widget; those must not run app actions. */
+const DESIGN_SILENT_EVENTS = new Set(['onClick', 'onSubmit']);
 
 /**
  * The application runtime.
@@ -86,6 +105,7 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
   }, [requestedPageId]);
   const [pageParams, setPageParams] = useState<Record<string, string>>(options.pageParams ?? {});
   const [widgetState, setWidgetStateMap] = useState<Record<string, Record<string, unknown>>>({});
+  const [propertyOverrides, setPropertyOverrides] = useState<Record<string, Record<string, unknown>>>({});
   const [queryState, setQueryState] = useState<Record<string, QueryRuntimeState>>({});
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [openModals, setOpenModals] = useState<string[]>([]);
@@ -100,10 +120,12 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
    * only catches up at render time would hand the event handler the previous value.
    */
   const widgetStateRef = useRef(widgetState);
+  const propertyOverridesRef = useRef(propertyOverrides);
   const queryStateRef = useRef(queryState);
   const evaluatedRef = useRef(evaluation.evaluated);
   queryStateRef.current = queryState;
   evaluatedRef.current = evaluation.evaluated;
+  propertyOverridesRef.current = propertyOverrides;
 
   /** Per-query request token, so a slow earlier response cannot overwrite a newer one. */
   const queryToken = useRef<Record<string, number>>({});
@@ -146,9 +168,11 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
     (widgetName: string): Record<string, unknown> => {
       const widget = findWidgetByName(page?.widgets ?? [], widgetName);
       if (!widget) return {};
-      return resolveProperties(widget, evaluation.evaluated);
+      const resolved = resolveProperties(widget, evaluation.evaluated);
+      const extra = propertyOverrides[widgetName];
+      return extra ? { ...resolved, ...extra } : resolved;
     },
-    [page, evaluation.evaluated],
+    [page, evaluation.evaluated, propertyOverrides],
   );
 
   /* --- queries ----------------------------------------------------- */
@@ -171,7 +195,7 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
       const currentPage = pageRef.current;
       if (!currentPage) return {};
 
-      const { dataTree: scope } = buildDataTree({
+      const { dataTree: rawTree } = buildDataTree({
         dsl,
         page: currentPage,
         queryState: queryStateRef.current,
@@ -182,6 +206,7 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
           ? { id: currentUser.id, name: currentUser.name, email: currentUser.email }
           : null,
       });
+      const scope = hydrateJsObjects(rawTree);
 
       // Overlay the worker's evaluated bindings so an expression reading another
       // widget's *computed* property still resolves.
@@ -271,6 +296,55 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
     setTimeout(() => setNotifications((previous) => previous.filter((n) => n.id !== id)), 5000);
   }, []);
 
+  const setOverride = useCallback((widgetName: string, patch: Record<string, unknown>): void => {
+    setPropertyOverrides((current) => {
+      const next = {
+        ...current,
+        [widgetName]: { ...(current[widgetName] ?? {}), ...patch },
+      };
+      propertyOverridesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const eventScope = useCallback((): Record<string, unknown> => {
+    const currentPage = pageRef.current;
+    const scope = buildWidgetScope({
+      widgets: currentPage?.widgets ?? [],
+      getState: (name) => widgetStateRef.current[name] ?? {},
+      getProperties: (name) => {
+        const widget = findWidgetByName(currentPage?.widgets ?? [], name);
+        if (!widget) return {};
+        const resolved = resolveProperties(widget, evaluatedRef.current);
+        const extra = propertyOverridesRef.current[name];
+        return extra ? { ...resolved, ...extra } : resolved;
+      },
+      setState: (name, patch) => {
+        const next = {
+          ...widgetStateRef.current,
+          [name]: { ...(widgetStateRef.current[name] ?? {}), ...patch },
+        };
+        widgetStateRef.current = next;
+        setWidgetStateMap(next);
+      },
+      setOverride,
+    });
+
+    for (const query of dsl.queries) {
+      if (scope[query.name] === undefined) {
+        scope[query.name] = queryStateRef.current[query.name] ?? emptyQueryState();
+      }
+    }
+    scope.page = {
+      params: pageParams,
+      name: currentPage?.name,
+      id: currentPage?.id,
+    };
+    scope.appState = dsl.appState ?? {};
+    attachJsObjects(scope, jsObjectsOnPage(dsl.jsObjects, currentPage?.id ?? ''));
+    return scope;
+  }, [dsl.appState, dsl.jsObjects, dsl.queries, pageParams, setOverride]);
+
   const runActions = useCallback(
     async (actions: ActionDsl[], payload?: Record<string, unknown>): Promise<void> => {
       for (const action of actions) {
@@ -319,12 +393,41 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
 
           case 'runJs':
             try {
-              // eslint-disable-next-line no-new-func
-              new Function('event', action.code)(payload ?? {});
+              await Promise.resolve(runJsSource(action.code, eventScope(), payload ?? {}));
             } catch (error) {
               notify(error instanceof Error ? error.message : String(error), 'error');
             }
             break;
+
+          case 'runJsFunction': {
+            const split = splitJsFunctionPath(action.path ?? '');
+            const currentPage = pageRef.current;
+            const source = split
+              ? jsObjectsOnPage(dsl.jsObjects, currentPage?.id ?? '').find(
+                  (object) => object.name === split.objectName,
+                )
+              : undefined;
+            if (!split || !source) {
+              notify(`Unknown JS function “${action.path}”`, 'error');
+              break;
+            }
+            try {
+              const scope = eventScope();
+              const fromScope = scope[split.objectName];
+              const live =
+                fromScope &&
+                typeof fromScope === 'object' &&
+                typeof (fromScope as Record<string, unknown>)[split.functionName] === 'function';
+              await Promise.resolve(
+                live
+                  ? callJsFunction(scope, split.objectName, split.functionName, payload ?? {})
+                  : runJsFunction(source.code, split.functionName, scope, payload ?? {}),
+              );
+            } catch (error) {
+              notify(error instanceof Error ? error.message : String(error), 'error');
+            }
+            break;
+          }
 
           case 'download': {
             const blob = new Blob([String(action.data)], { type: action.mimeType });
@@ -339,12 +442,12 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
         }
       }
     },
-    [runQuery, notify, dsl.appState],
+    [runQuery, notify, dsl.appState, dsl.jsObjects, eventScope],
   );
 
   const fireEvent = useCallback(
     (widgetName: string, event: string, payload?: Record<string, unknown>): void => {
-      if (isDesignMode) return;
+      if (isDesignMode && DESIGN_SILENT_EVENTS.has(event)) return;
       const widget = findWidgetByName(page?.widgets ?? [], widgetName);
 
       /*
@@ -358,7 +461,23 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
        */
       const configured = widget?.events?.[event] ?? widget?.properties?.[event];
       const actions = Array.isArray(configured) ? (configured as ActionDsl[]) : [];
-      if (actions.length > 0) void runActions(actions, payload);
+      if (actions.length === 0) return;
+
+      const properties = widget ? resolveProperties(widget, evaluatedRef.current) : {};
+      const state = widgetStateRef.current[widgetName] ?? {};
+      const enriched = {
+        ...payload,
+        widgetId: widget?.id,
+        widgetName,
+        source: {
+          id: widget?.id,
+          name: widgetName,
+          type: widget?.type,
+          className: String(properties.className ?? properties.class ?? ''),
+          value: payload?.value ?? state.value ?? state.text,
+        },
+      };
+      void runActions(actions, enriched);
     },
     [page, runActions, isDesignMode],
   );

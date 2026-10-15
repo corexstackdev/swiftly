@@ -119,6 +119,15 @@ export const THUMBNAILS: Record<string, React.ReactNode> = {
     </Frame>
   ),
 
+  currency_input: (
+    <Frame>
+      <text x="8" y="20" fill={ACCENT} fontSize="13" fontFamily="Georgia, serif">
+        $
+      </text>
+      {bar(18, 14, 16)}
+    </Frame>
+  ),
+
   date_picker: (
     <Frame>
       <path d="M1 10h42M11 1v5M33 1v5" stroke={ACCENT} strokeWidth="1.2" />

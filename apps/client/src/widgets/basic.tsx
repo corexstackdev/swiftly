@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
-import type { TabDisplayMode, ValidationRule } from '@swiftly/shared';
+import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
 import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';

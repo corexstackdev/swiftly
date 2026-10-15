@@ -24,7 +24,8 @@ export interface DslHistory {
   canUndo: boolean;
   canRedo: boolean;
   isDirty: boolean;
-  markSaved: () => void;
+  /** Marks the given snapshot saved, or the current document if omitted. */
+  markSaved: (snapshot?: ApplicationDsl) => void;
 }
 
 export function useDslHistory(initial: ApplicationDsl): DslHistory {
@@ -92,8 +93,8 @@ export function useDslHistory(initial: ApplicationDsl): DslHistory {
     forceRender((n) => n + 1);
   }, []);
 
-  const markSaved = useCallback(() => {
-    savedSnapshot.current = JSON.stringify(dsl);
+  const markSaved = useCallback((snapshot?: ApplicationDsl) => {
+    savedSnapshot.current = JSON.stringify(snapshot ?? dsl);
     forceRender((n) => n + 1);
   }, [dsl]);
 

@@ -1,14 +1,5 @@
--- CreateEnum
-CREATE TYPE "IdentityProviderType" AS ENUM ('LOCAL', 'LDAP', 'OIDC', 'SAML');
-
--- CreateEnum
-CREATE TYPE "ApplicationStatus" AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED');
-
--- CreateEnum
-CREATE TYPE "VersionStatus" AS ENUM ('PENDING_REVIEW', 'APPROVED', 'REJECTED', 'PUBLISHED', 'ROLLED_BACK', 'ARCHIVED');
-
--- CreateEnum
-CREATE TYPE "ComponentIsolation" AS ENUM ('IFRAME', 'INLINE');
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
 
 -- CreateTable
 CREATE TABLE "organizations" (
@@ -17,7 +8,7 @@ CREATE TABLE "organizations" (
     "slug" TEXT NOT NULL,
     "region" TEXT NOT NULL DEFAULT 'default',
     "dataResidency" BOOLEAN NOT NULL DEFAULT false,
-    "settings" JSONB NOT NULL DEFAULT '{}',
+    "settings" JSONB NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -46,7 +37,7 @@ CREATE TABLE "user_identities" (
     "userId" TEXT NOT NULL,
     "identityProviderId" TEXT NOT NULL,
     "externalId" TEXT NOT NULL,
-    "externalGroups" TEXT[],
+    "externalGroups" JSONB NOT NULL,
     "lastSyncedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "user_identities_pkey" PRIMARY KEY ("id")
@@ -70,7 +61,7 @@ CREATE TABLE "roles" (
     "name" TEXT NOT NULL,
     "description" TEXT,
     "isSystem" BOOLEAN NOT NULL DEFAULT false,
-    "permissions" TEXT[],
+    "permissions" JSONB NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -92,10 +83,10 @@ CREATE TABLE "group_role_mappings" (
 CREATE TABLE "identity_providers" (
     "id" TEXT NOT NULL,
     "organizationId" TEXT NOT NULL,
-    "type" "IdentityProviderType" NOT NULL,
+    "type" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "isEnabled" BOOLEAN NOT NULL DEFAULT true,
-    "config" JSONB NOT NULL DEFAULT '{}',
+    "config" JSONB NOT NULL,
     "encryptedSecrets" TEXT,
     "autoProvision" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -134,7 +125,7 @@ CREATE TABLE "applications" (
     "slug" TEXT NOT NULL,
     "icon" TEXT,
     "description" TEXT,
-    "status" "ApplicationStatus" NOT NULL DEFAULT 'DRAFT',
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
     "draftDsl" JSONB NOT NULL,
     "draftRevision" INTEGER NOT NULL DEFAULT 0,
     "publishedVersionId" TEXT,
@@ -150,7 +141,7 @@ CREATE TABLE "application_versions" (
     "id" TEXT NOT NULL,
     "applicationId" TEXT NOT NULL,
     "versionNumber" INTEGER NOT NULL,
-    "status" "VersionStatus" NOT NULL DEFAULT 'PENDING_REVIEW',
+    "status" TEXT NOT NULL DEFAULT 'PENDING_REVIEW',
     "dsl" JSONB NOT NULL,
     "changeNote" TEXT,
     "submittedById" TEXT NOT NULL,
@@ -196,7 +187,7 @@ CREATE TABLE "datasource_configs" (
     "id" TEXT NOT NULL,
     "datasourceId" TEXT NOT NULL,
     "environmentId" TEXT NOT NULL,
-    "publicConfig" JSONB NOT NULL DEFAULT '{}',
+    "publicConfig" JSONB NOT NULL,
     "encryptedConfig" TEXT NOT NULL,
     "iv" TEXT NOT NULL,
     "authTag" TEXT NOT NULL,
@@ -213,7 +204,7 @@ CREATE TABLE "custom_components" (
     "version" TEXT NOT NULL,
     "manifest" JSONB NOT NULL,
     "bundlePath" TEXT NOT NULL,
-    "isolation" "ComponentIsolation" NOT NULL DEFAULT 'IFRAME',
+    "isolation" TEXT NOT NULL DEFAULT 'IFRAME',
     "isEnabled" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -229,7 +220,7 @@ CREATE TABLE "audit_logs" (
     "action" TEXT NOT NULL,
     "resourceType" TEXT NOT NULL,
     "resourceId" TEXT,
-    "metadata" JSONB NOT NULL DEFAULT '{}',
+    "metadata" JSONB NOT NULL,
     "ipAddress" TEXT,
     "userAgent" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -395,3 +386,4 @@ ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_organizationId_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+

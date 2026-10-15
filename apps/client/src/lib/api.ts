@@ -22,6 +22,26 @@ export class ApiError extends Error {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
+/** Login and refresh mint cookies; retrying them against themselves would loop. */
+function canRefresh(path: string): boolean {
+  return path !== '/auth/login' && path !== '/auth/refresh' && path !== '/auth/logout';
+}
+
+async function refreshSession(): Promise<boolean> {
+  // Collapse concurrent refreshes: a page load fires many requests at once and
+  // they must not each mint a new token pair.
+  refreshInFlight ??= fetch(`${BASE}/auth/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+  })
+    .then((response) => response.ok)
+    .finally(() => {
+      refreshInFlight = null;
+    });
+  return refreshInFlight;
+}
+
 async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
@@ -32,16 +52,8 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
     },
   });
 
-  if (response.status === 401 && retry && !path.startsWith('/auth/')) {
-    // Collapse concurrent refreshes: a page load fires many requests at once and
-    // they must not each mint a new token pair.
-    refreshInFlight ??= fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
-      .then((r) => r.ok)
-      .finally(() => {
-        refreshInFlight = null;
-      });
-
-    if (await refreshInFlight) return request<T>(path, init, false);
+  if (response.status === 401 && retry && canRefresh(path)) {
+    if (await refreshSession()) return request<T>(path, init, false);
   }
 
   if (!response.ok) {
@@ -175,6 +187,7 @@ export const api = {
         { email, password },
       ),
     me: () => request<SessionUser>('/auth/me'),
+    refresh: () => refreshSession(),
     logout: () => post<{ ok: true }>('/auth/logout'),
   },
 

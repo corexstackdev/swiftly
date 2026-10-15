@@ -16,7 +16,7 @@ import {
   radioGroupWidget,
   switchWidget,
 } from './toggles';
-import { datePickerWidget, numberInputWidget, sliderWidget } from './pickers';
+import { datePickerWidget, numberInputWidget, currencyInputWidget, sliderWidget } from './pickers';
 import {
   dividerWidget,
   iframeWidget,
@@ -50,6 +50,7 @@ register(dividerWidget);
 // Inputs
 register(inputWidget);
 register(numberInputWidget);
+register(currencyInputWidget);
 register(selectWidget);
 register(datePickerWidget);
 register(checkboxWidget);

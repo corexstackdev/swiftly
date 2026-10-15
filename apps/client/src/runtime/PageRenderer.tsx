@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import type { WidgetDsl } from '@swiftly/shared';
 import { getWidget } from '@/widgets/registry';
 import type { AppRuntime } from './useAppRuntime';
@@ -95,32 +96,36 @@ export function WidgetHost({
 
   const Component = registered.component;
 
+  const className = String(runtime.properties(widget.name).className ?? '');
+
   return (
     <ErrorBoundary widgetName={widget.name}>
-      <Component
-        widget={widget}
-        properties={runtime.properties(widget.name)}
-        state={runtime.widgetState[widget.name] ?? {}}
-        setState={(patch) => runtime.setWidgetState(widget.name, patch)}
-        fireEvent={(event, payload) => runtime.fireEvent(widget.name, event, payload)}
-        isDesignMode={isDesignMode}
-        host={runtimeHost(runtime)}
-        children={widget.children}
-        renderChild={(child) => (
-          <WidgetHost widget={child} runtime={runtime} isDesignMode={isDesignMode} />
-        )}
-        renderChildren={
-          widget.children
-            ? (filter) => (
-                <PageRenderer
-                  widgets={filter ? widget.children!.filter(filter) : widget.children!}
-                  runtime={runtime}
-                  isDesignMode={isDesignMode}
-                />
-              )
-            : undefined
-        }
-      />
+      <div id={widget.id} data-widget-name={widget.name} className={clsx('h-full w-full', className)}>
+        <Component
+          widget={widget}
+          properties={runtime.properties(widget.name)}
+          state={runtime.widgetState[widget.name] ?? {}}
+          setState={(patch) => runtime.setWidgetState(widget.name, patch)}
+          fireEvent={(event, payload) => runtime.fireEvent(widget.name, event, payload)}
+          isDesignMode={isDesignMode}
+          host={runtimeHost(runtime)}
+          children={widget.children}
+          renderChild={(child) => (
+            <WidgetHost widget={child} runtime={runtime} isDesignMode={isDesignMode} />
+          )}
+          renderChildren={
+            widget.children
+              ? (filter) => (
+                  <PageRenderer
+                    widgets={filter ? widget.children!.filter(filter) : widget.children!}
+                    runtime={runtime}
+                    isDesignMode={isDesignMode}
+                  />
+                )
+              : undefined
+          }
+        />
+      </div>
     </ErrorBoundary>
   );
 }

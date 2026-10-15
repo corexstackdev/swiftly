@@ -151,6 +151,19 @@ export function clampToBounds(value: unknown, properties: Record<string, unknown
   return next;
 }
 
+/** Clamp, then round to `decimals` when the field asks for a fixed scale (currency). */
+export function constrainNumeric(value: unknown, properties: Record<string, unknown>): unknown {
+  const clamped = clampToBounds(value, properties);
+  if (clamped === undefined || clamped === null || clamped === '') return clamped;
+  const decimals = numberBound(properties.decimals);
+  if (decimals === undefined) return clamped;
+  const number = Number(clamped);
+  if (!Number.isFinite(number)) return clamped;
+  const places = Math.max(0, Math.min(8, Math.trunc(decimals)));
+  const factor = 10 ** places;
+  return Math.round(number * factor) / factor;
+}
+
 /** Required waits for blur; range and format errors show as soon as there is a value. */
 export function showFieldError(
   outcome: ValidationOutcome,

@@ -1,5 +1,14 @@
 import type { PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getChromeRows, getWidgetDefinition } from '@/widgets/registry';
+import {
+  childNeedsCellPlacement,
+  gridMinRowHeight,
+  placeUnpositionedGridChildren,
+  rowTrackHeights,
+} from './gridCells';
+
+/** Canvas row height plus gap — same pitch SpacingEditor uses for padding chrome. */
+const CANVAS_ROW_PITCH = 28;
 
 /**
  * Widget tree operations.
@@ -135,14 +144,27 @@ export function uniqueSlug(name: string, existing: { slug: string }[]): string {
  * it is fighting back.
  */
 export function requiredContainerHeight(container: WidgetDsl): number {
+  const definition = getWidgetDefinition(container.type);
   const children = container.children ?? [];
-  const minimum = getWidgetDefinition(container.type)?.minSize.h ?? 1;
+  const minimum = definition?.minSize.h ?? 1;
+  const chrome = getChromeRows(container.type, container.properties);
+
+  if (definition?.childLayout === 'cells') {
+    const columns = Math.max(1, Number(container.properties.columns ?? 3));
+    const minRowHeight = gridMinRowHeight(container.properties);
+    const rowGap = Number(container.properties.rowGap ?? 12);
+    const tracks = rowTrackHeights(children, columns, minRowHeight);
+    const contentPx =
+      tracks.reduce((total, height) => total + height, 0) + Math.max(0, tracks.length - 1) * rowGap;
+    return Math.max(minimum, Math.ceil(contentPx / CANVAS_ROW_PITCH) + chrome);
+  }
+
   if (children.length === 0) return minimum;
 
   const contentRows = Math.max(
     ...children.map((child) => child.layout.y + child.layout.h),
   );
-  return Math.max(minimum, contentRows + getChromeRows(container.type, container.properties));
+  return Math.max(minimum, contentRows + chrome);
 }
 
 /**
@@ -161,6 +183,10 @@ export function fitAllContainers(page: PageDsl): void {
       if (!widget.children || widget.children.length === 0) continue;
       walk(widget.children);
 
+      if (getWidgetDefinition(widget.type)?.childLayout === 'cells') {
+        placeUnpositionedGridChildren(widget);
+      }
+
       const required = requiredContainerHeight(widget);
       if (widget.layout.h < required) {
         widget.layout = { ...widget.layout, h: required };
@@ -176,6 +202,12 @@ export function needsContainerFit(page: PageDsl): boolean {
     widgets.some((widget) => {
       if (!widget.children || widget.children.length === 0) return false;
       if (check(widget.children)) return true;
+      if (
+        getWidgetDefinition(widget.type)?.childLayout === 'cells' &&
+        widget.children.some(childNeedsCellPlacement)
+      ) {
+        return true;
+      }
       return widget.layout.h < requiredContainerHeight(widget);
     });
   return check(page.widgets);

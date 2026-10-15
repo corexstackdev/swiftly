@@ -5,7 +5,13 @@ import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { FieldLabel, LABEL_PROPERTIES } from './FieldLabel';
 import { fieldControlStyle, textStyleProperties, textStyleToCss } from './textStyle';
-import { asArray } from './coerce';
+import {
+  CHOICE_SOURCE_PROPERTIES,
+  choiceSourceError,
+  emptyChoiceHint,
+  normaliseChoiceOptions,
+  type ChoiceOption,
+} from './choiceSource';
 
 /**
  * Select / combobox.
@@ -15,11 +21,6 @@ import { asArray } from './coerce';
  * plain `<select>` with that many options locks the tab on open.
  */
 
-interface Option {
-  label: string;
-  value: unknown;
-}
-
 const OPTION_HEIGHT = 30;
 
 function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
@@ -27,7 +28,8 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
   const [search, setSearch] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
 
-  const options = useMemo<Option[]>(() => normaliseOptions(properties), [properties]);
+  const options = useMemo<ChoiceOption[]>(() => normaliseChoiceOptions(properties), [properties]);
+  const dataError = choiceSourceError(properties);
 
   const filtered = useMemo(() => {
     if (!search) return options;
@@ -90,7 +92,7 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
               placeholder="Search"
               className="no-drag w-full border-b border-slate-200 px-2 py-1.5 text-sm outline-none"
             />
-            <div ref={listRef} className="max-h-56 overflow-auto">
+            <div ref={listRef} className="max-h-56 overflow-auto pt-3">
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const option = filtered[virtualRow.index];
@@ -126,38 +128,17 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
                 })}
               </div>
               {filtered.length === 0 && (
-                <div className="px-2 py-3 text-sm text-slate-400">No matches</div>
+                <div className="px-2 py-3 text-sm text-slate-400">
+                  {dataError ?? (options.length === 0 ? emptyChoiceHint(properties) : 'No matches')}
+                </div>
               )}
             </div>
           </div>
         )}
       </div>
+      {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
     </div>
   );
-}
-
-/**
- * Accepts either a static `[{label, value}]` list or a query result plus the column
- * names to read — the second form is what makes "options from a query" a two-field
- * configuration instead of a JavaScript expression.
- */
-function normaliseOptions(properties: Record<string, unknown>): Option[] {
-  const raw = asArray(properties.options);
-  if (raw.length === 0) return [];
-
-  const labelKey = typeof properties.labelKey === 'string' ? properties.labelKey : 'label';
-  const valueKey = typeof properties.valueKey === 'string' ? properties.valueKey : 'value';
-
-  return raw.map((item) => {
-    if (item !== null && typeof item === 'object') {
-      const record = item as Record<string, unknown>;
-      return {
-        label: String(record[labelKey] ?? record.label ?? record.value ?? ''),
-        value: record[valueKey] ?? record.value ?? record[labelKey],
-      };
-    }
-    return { label: String(item), value: item };
-  });
 }
 
 export const selectWidget: RegisteredWidget = {
@@ -177,18 +158,7 @@ export const selectWidget: RegisteredWidget = {
     properties: [
       {
         name: 'Data',
-        properties: [
-          {
-            key: 'options',
-            label: 'Options',
-            control: 'code',
-            expectedType: 'array',
-            bindable: true,
-            helpText: 'A static list, or a query result such as {{ GetRegions.data }}',
-          },
-          { key: 'labelKey', label: 'Label field', control: 'text', expectedType: 'string', bindable: false, defaultValue: 'label' },
-          { key: 'valueKey', label: 'Value field', control: 'text', expectedType: 'string', bindable: false, defaultValue: 'value' },
-        ],
+        properties: CHOICE_SOURCE_PROPERTIES,
       },
       {
         name: 'Content',

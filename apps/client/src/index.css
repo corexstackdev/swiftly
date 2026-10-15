@@ -34,16 +34,30 @@ body,
   background-image: none;
   padding: 0;
   opacity: 0;
+  /* Hidden handles must not steal clicks: they sit on the item's edges, which is
+     also where a nested child (or a Grid cell) puts its own grips. */
+  pointer-events: none;
   transition: opacity 120ms ease;
   /* Above the widget's own content, so a table or an iframe cannot swallow the
-     pointer before the handle sees it. */
-  z-index: 3;
+     pointer before the handle sees it. Also above the in-item Delete button. */
+  z-index: 50;
 }
 
-.react-grid-item:hover > .react-resizable-handle,
-.react-grid-item > div.is-selected ~ .react-resizable-handle,
-.react-grid-item:focus-within > .react-resizable-handle {
+/*
+ * `is-selected` lives on the grid item itself (the same node as these handles),
+ * not on a child. The old `div.is-selected ~ handle` selector never matched, so
+ * a selected widget showed no grips until a hover happened to land on the 10px
+ * edge — which is why Grid, Form, and the controls inside them felt unresizable.
+ *
+ * `:has([data-canvas-widget]:hover)` is a descendant check: hovering a nested
+ * widget must not reveal the parent's handles, or the parent steals the child's
+ * resize. Hovering empty space inside this item still shows them.
+ */
+.react-grid-item.is-selected > .react-resizable-handle,
+.react-grid-item:hover:not(:has([data-canvas-widget]:hover)) > .react-resizable-handle,
+.react-grid-item:focus-within:not(:has([data-canvas-widget]:focus-within)) > .react-resizable-handle {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /*
@@ -125,7 +139,7 @@ body,
 .react-grid-item > .react-resizable-handle-se {
   width: 14px;
   height: 14px;
-  z-index: 4;
+  z-index: 51;
 }
 
 .react-grid-item > .react-resizable-handle-nw::after,
@@ -147,22 +161,6 @@ body,
 .react-grid-item > .react-resizable-handle-ne { top: -7px; right: -7px; cursor: nesw-resize; }
 .react-grid-item > .react-resizable-handle-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
 .react-grid-item > .react-resizable-handle-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
-
-/*
- * A container's own handles must win over its children's. Without this the
- * handles of a child sitting in the corner of a container cover the container's,
- * and the container becomes the one widget on the page that cannot be resized.
- */
-.nested-canvas .react-grid-item > .react-resizable-handle {
-  z-index: 1;
-}
-
-.nested-canvas .react-grid-item > .react-resizable-handle-nw,
-.nested-canvas .react-grid-item > .react-resizable-handle-ne,
-.nested-canvas .react-grid-item > .react-resizable-handle-sw,
-.nested-canvas .react-grid-item > .react-resizable-handle-se {
-  z-index: 2;
-}
 
 /* While a widget is being dragged or resized it should float above everything,
    including a container it is passing over. */

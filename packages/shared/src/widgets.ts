@@ -24,6 +24,7 @@ export type PropertyControl =
   | 'column_config'
   | 'tab_list'
   | 'query_picker'
+  | 'js_function'
   | 'json';
 
 export type ExpectedType = 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any';
@@ -45,7 +46,7 @@ export interface PropertyDefinition {
   defaultValue?: unknown;
   helpText?: string;
   placeholder?: string;
-  options?: { value: string; label: string }[];
+  options?: { value: string; label: string; disabled?: boolean }[];
   visibleWhen?: VisibleWhen;
 }
 

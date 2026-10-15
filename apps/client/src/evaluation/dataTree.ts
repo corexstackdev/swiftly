@@ -1,5 +1,13 @@
-import type { ApplicationDsl, PageDsl, QueryEntity, QueryResult, WidgetDsl } from '@swiftly/shared';
+import {
+  jsObjectsOnPage,
+  type ApplicationDsl,
+  type PageDsl,
+  type QueryEntity,
+  type QueryResult,
+  type WidgetDsl,
+} from '@swiftly/shared';
 import { getWidgetDefinition } from '@/widgets/registry';
+import { jsObjectStub } from './jsObjects';
 
 /**
  * Builds the two inputs the evaluation worker needs:
@@ -91,8 +99,12 @@ export function buildDataTree(input: BuildInput): DataTreeResult {
     };
   }
 
-  for (const jsObject of input.dsl.jsObjects ?? []) {
-    dataTree[jsObject.name] = loadJsObject(jsObject.name, jsObject.code);
+  for (const jsObject of jsObjectsOnPage(input.dsl.jsObjects, input.page.id)) {
+    // Source, not compiled functions: the worker receives this tree over
+    // postMessage, which cannot clone a function. `widgets` / `document` are
+    // reserved so a helper cannot shadow the control catalog or DOM lookups.
+    if (jsObject.name === 'widgets' || jsObject.name === 'controls' || jsObject.name === 'document') continue;
+    dataTree[jsObject.name] = jsObjectStub(jsObject.name, jsObject.code);
   }
 
   walkWidgets(input.page.widgets, (widget) => {
@@ -100,7 +112,13 @@ export function buildDataTree(input: BuildInput): DataTreeResult {
     const exposed = input.widgetState[widget.name] ?? {};
 
     // Widget state first: an input's current text is data, not a binding.
-    const entity: Record<string, unknown> = { ...exposed };
+    const entity: Record<string, unknown> = {
+      ...exposed,
+      id: widget.id,
+      name: widget.name,
+      type: widget.type,
+      className: widget.properties.className ?? widget.properties.class ?? '',
+    };
 
     for (const section of definition?.properties ?? []) {
       for (const property of section.properties) {
@@ -160,28 +178,4 @@ export function emptyQueryState(): QueryRuntimeState {
 
 export function toQueryState(result: QueryResult): QueryRuntimeState {
   return { data: result.rows, isLoading: false, error: null, lastRunAt: Date.now() };
-}
-
-/**
- * Compiles a JS object's exported members into a callable namespace. Failures are
- * swallowed into an empty namespace so one broken helper cannot blank the page —
- * the error surfaces on the JS object itself in the editor.
- */
-const jsObjectCache = new Map<string, { code: string; exports: Record<string, unknown> }>();
-
-function loadJsObject(name: string, code: string): Record<string, unknown> {
-  const cached = jsObjectCache.get(name);
-  if (cached && cached.code === code) return cached.exports;
-
-  let exports: Record<string, unknown> = {};
-  try {
-    // eslint-disable-next-line no-new-func
-    const factory = new Function(`"use strict"; const module = { exports: {} }; ${code}; return module.exports;`);
-    exports = (factory() ?? {}) as Record<string, unknown>;
-  } catch {
-    exports = {};
-  }
-
-  jsObjectCache.set(name, { code, exports });
-  return exports;
 }

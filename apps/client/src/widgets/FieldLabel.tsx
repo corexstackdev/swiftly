@@ -1,16 +1,14 @@
-import clsx from 'clsx';
 import type { PropertyDefinition, TabDisplayMode } from '@swiftly/shared';
+
+/** How a field label paints. `hidden` is field-only — tabs have no equivalent. */
+export type LabelDisplayMode = TabDisplayMode | 'hidden';
 
 /**
  * The label above a form field.
  *
- * Text, an icon, or both — the same three choices a tab has, and the same type,
- * because "show me the icon only" means the same thing in both places and two
- * different vocabularies for it would be two things to learn.
- *
- * An icon-only label still writes its text into the DOM, hidden. A field with a
- * bare 🔍 above it is unusable with a screen reader and ambiguous to everyone
- * else once the form has more than one of them, so dropping the words is a
+ * Text, an icon, both, or none. Icon-only still writes its text into the DOM,
+ * hidden: a field with a bare 🔍 above it is unusable with a screen reader and
+ * ambiguous once the form has more than one of them, so dropping the words is a
  * visual choice, never an informational one.
  */
 
@@ -25,7 +23,7 @@ export function FieldLabel({
 }: {
   text: unknown;
   icon?: unknown;
-  display?: TabDisplayMode;
+  display?: LabelDisplayMode;
   required?: boolean;
   htmlFor?: string;
   /** Typography from the widget's Label style section. */
@@ -40,26 +38,45 @@ export function FieldLabel({
 }) {
   const label = String(text ?? '');
   const glyph = String(icon ?? '').trim();
+  const mode: LabelDisplayMode = display ?? 'text';
+
+  if (mode === 'hidden') return null;
   if (label === '' && glyph === '') return null;
 
-  // Asking for an icon without giving one would otherwise render an empty label
-  // and lose the field's name entirely.
-  const mode: TabDisplayMode = glyph === '' ? 'text' : display;
+  const showIcon = (mode === 'icon' || mode === 'icon_text') && glyph !== '';
+  const showText = mode !== 'icon';
 
   const Tag = as;
+
+  // Icon-only with no glyph: keep the name for assistive tech, hide it visually
+  // so changing Label shows actually changes the canvas.
+  if (!showIcon && !showText) {
+    if (label === '') return null;
+    return (
+      <Tag htmlFor={as === 'label' ? htmlFor : undefined} className="sr-only">
+        {label}
+        {required ? ' (required)' : ''}
+      </Tag>
+    );
+  }
 
   return (
     <Tag
       htmlFor={as === 'label' ? htmlFor : undefined}
-      style={style}
-      className={clsx('flex items-center gap-1.5 text-xs font-medium text-slate-600')}
+      style={{
+        fontSize: 12,
+        fontWeight: 500,
+        color: '#475569',
+        ...style,
+      }}
+      className="flex items-center gap-1.5"
     >
-      {mode !== 'text' && <span aria-hidden="true">{glyph}</span>}
+      {showIcon && <span aria-hidden="true">{glyph}</span>}
 
-      {mode === 'icon' ? (
-        <span className="sr-only">{label}</span>
-      ) : (
+      {showText ? (
         <span className="truncate">{label}</span>
+      ) : (
+        <span className="sr-only">{label}</span>
       )}
 
       {required && (
@@ -109,7 +126,13 @@ export const LABEL_PROPERTIES: PropertyDefinition[] = [
     expectedType: 'string',
     bindable: false,
     defaultValue: 'text',
-    helpText: 'Icon-only still reads the label out to a screen reader.',
+    options: [
+      { value: 'text', label: 'Text only' },
+      { value: 'icon_text', label: 'Icon and text' },
+      { value: 'icon', label: 'Icon only' },
+      { value: 'hidden', label: 'Hidden' },
+    ],
+    helpText: 'Hidden and icon-only still read the label out to a screen reader.',
   },
   {
     key: 'labelIcon',

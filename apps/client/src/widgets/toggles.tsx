@@ -1,11 +1,16 @@
-import { useMemo } from 'react';
+import { useMemo, type CSSProperties } from 'react';
 import clsx from 'clsx';
 import type { TabDisplayMode } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
 import { FieldLabel, labelProperties } from './FieldLabel';
 import { textStyleProperties, textStyleToCss } from './textStyle';
-import { asArray } from './coerce';
+import {
+  CHOICE_SOURCE_PROPERTIES,
+  choiceSourceError,
+  emptyChoiceHint,
+  normaliseChoiceOptions,
+} from './choiceSource';
 
 /**
  * Boolean and choice inputs.
@@ -14,11 +19,6 @@ import { asArray } from './coerce';
  * a query result plus the two column names — so binding a radio group to a lookup
  * table is configuration rather than an expression.
  */
-
-interface Option {
-  label: string;
-  value: unknown;
-}
 
 /**
  * The tick, the dot, the filled track.
@@ -63,52 +63,6 @@ function styleSections(
   };
 }
 
-function normaliseOptions(properties: Record<string, unknown>): Option[] {
-  const raw = asArray(properties.options);
-  if (raw.length === 0) return [];
-
-  const labelKey = typeof properties.labelKey === 'string' ? properties.labelKey : 'label';
-  const valueKey = typeof properties.valueKey === 'string' ? properties.valueKey : 'value';
-
-  return raw.map((item) => {
-    if (item !== null && typeof item === 'object') {
-      const record = item as Record<string, unknown>;
-      return {
-        label: String(record[labelKey] ?? record.label ?? record.value ?? ''),
-        value: record[valueKey] ?? record.value ?? record[labelKey],
-      };
-    }
-    return { label: String(item), value: item };
-  });
-}
-
-const optionProperties = [
-  {
-    key: 'options',
-    label: 'Options',
-    control: 'code' as const,
-    expectedType: 'array' as const,
-    bindable: true,
-    helpText: 'A static list, or a query result such as {{ GetRegions.data }}',
-  },
-  {
-    key: 'labelKey',
-    label: 'Label field',
-    control: 'text' as const,
-    expectedType: 'string' as const,
-    bindable: false,
-    defaultValue: 'label',
-  },
-  {
-    key: 'valueKey',
-    label: 'Value field',
-    control: 'text' as const,
-    expectedType: 'string' as const,
-    bindable: false,
-    defaultValue: 'value',
-  },
-];
-
 const behaviourProperties = (eventKey: string) => [
   {
     key: 'disabled',
@@ -126,6 +80,44 @@ const behaviourProperties = (eventKey: string) => [
     bindable: false,
   },
 ];
+
+function isHorizontal(properties: Record<string, unknown>): boolean {
+  return String(properties.direction ?? 'vertical') === 'horizontal';
+}
+
+function optionTextStyle(properties: Record<string, unknown>): CSSProperties {
+  return {
+    fontSize: 14,
+    color: '#334155',
+    ...textStyleToCss(properties, 'option'),
+  };
+}
+
+function optionsRowStyle(horizontal: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    flexDirection: horizontal ? 'row' : 'column',
+    flexWrap: 'nowrap',
+    alignItems: horizontal ? 'center' : 'stretch',
+    columnGap: 16,
+    rowGap: 4,
+    overflowX: horizontal ? 'auto' : undefined,
+  };
+}
+
+const DIRECTION_PROPERTY = {
+  key: 'direction',
+  label: 'Direction',
+  control: 'select' as const,
+  expectedType: 'string' as const,
+  bindable: false,
+  defaultValue: 'vertical',
+  options: [
+    { value: 'vertical', label: 'Vertical' },
+    { value: 'horizontal', label: 'Horizontal' },
+  ],
+  helpText: 'Vertical stacks the choices. Horizontal puts them in a row.',
+};
 
 const CHECKBOX_STYLE = styleSections('Checkbox');
 const SWITCH_STYLE = styleSections('Enabled');
@@ -266,9 +258,10 @@ export const switchWidget: RegisteredWidget = {
 
 function RadioGroupWidget({ widget, properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
   const selected = useSeededValue(state, setState, properties.defaultValue, { isDesignMode });
-  const options = useMemo(() => normaliseOptions(properties), [properties]);
-  const horizontal = properties.direction === 'horizontal';
-  const optionStyle = textStyleToCss(properties, 'option');
+  const options = useMemo(() => normaliseChoiceOptions(properties), [properties]);
+  const dataError = choiceSourceError(properties);
+  const horizontal = isHorizontal(properties);
+  const optionStyle = optionTextStyle(properties);
 
   return (
     <div className="flex h-full w-full flex-col gap-1 overflow-auto">
@@ -280,9 +273,12 @@ function RadioGroupWidget({ widget, properties, state, setState, fireEvent, isDe
         style={textStyleToCss(properties, 'label')}
       />
 
-      <div className={clsx('flex gap-x-4 gap-y-1', horizontal ? 'flex-row flex-wrap' : 'flex-col')}>
+      <div className="min-w-0" style={optionsRowStyle(horizontal)}>
         {options.map((option, index) => (
-          <label key={index} className="flex cursor-pointer items-center gap-2">
+          <label
+            key={index}
+            className={clsx('flex cursor-pointer items-center gap-2', horizontal && 'shrink-0')}
+          >
             <input
               type="radio"
               // Grouping is by widget name, so two radio groups on one page do not
@@ -295,18 +291,22 @@ function RadioGroupWidget({ widget, properties, state, setState, fireEvent, isDe
                 fireEvent('onChange', { value: option.value });
               }}
               style={{ accentColor: accentOf(properties) }}
-              className="no-drag h-4 w-4 accent-blue-600"
+              className="no-drag h-4 w-4 shrink-0 accent-blue-600"
             />
-            <span className="truncate text-sm text-slate-700" style={optionStyle}>
+            <span
+              className={horizontal ? 'whitespace-nowrap' : 'min-w-0 truncate'}
+              style={optionStyle}
+            >
               {option.label}
             </span>
           </label>
         ))}
 
-        {options.length === 0 && (
-          <span className="text-xs text-slate-400">Bind options to show choices</span>
+        {options.length === 0 && !dataError && (
+          <span className="text-xs text-slate-400">{emptyChoiceHint(properties)}</span>
         )}
       </div>
+      {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
     </div>
   );
 }
@@ -318,7 +318,7 @@ export const radioGroupWidget: RegisteredWidget = {
     displayName: 'Radio Group',
     category: 'input',
     icon: 'radio',
-    defaultLayout: { x: 0, y: 0, w: 5, h: 5 },
+    defaultLayout: { x: 0, y: 0, w: 10, h: 4 },
     minSize: { w: 2, h: 2 },
     events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
     exposedState: [
@@ -326,13 +326,13 @@ export const radioGroupWidget: RegisteredWidget = {
       { key: 'selectedLabel', type: 'string', description: 'Selected label' },
     ],
     properties: [
-      { name: 'Data', properties: optionProperties },
+      { name: 'Data', properties: CHOICE_SOURCE_PROPERTIES },
       {
         name: 'Content',
         properties: [
           ...RADIO_STYLE.content,
           { key: 'defaultValue', label: 'Default value', control: 'text', expectedType: 'string', bindable: true },
-          { key: 'direction', label: 'Direction', control: 'select', expectedType: 'string', bindable: false, defaultValue: 'vertical' },
+          DIRECTION_PROPERTY,
         ],
       },
       ...RADIO_STYLE.sections,
@@ -346,10 +346,11 @@ export const radioGroupWidget: RegisteredWidget = {
  * ------------------------------------------------------------------ */
 
 function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetProps) {
-  const options = useMemo(() => normaliseOptions(properties), [properties]);
+  const options = useMemo(() => normaliseChoiceOptions(properties), [properties]);
+  const dataError = choiceSourceError(properties);
   const selected = Array.isArray(state.value) ? (state.value as unknown[]) : [];
-  const horizontal = properties.direction === 'horizontal';
-  const optionStyle = textStyleToCss(properties, 'option');
+  const horizontal = isHorizontal(properties);
+  const optionStyle = optionTextStyle(properties);
 
   const toggle = (value: unknown): void => {
     const next = selected.includes(value)
@@ -369,27 +370,34 @@ function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetP
         style={textStyleToCss(properties, 'label')}
       />
 
-      <div className={clsx('flex gap-x-4 gap-y-1', horizontal ? 'flex-row flex-wrap' : 'flex-col')}>
+      <div className="min-w-0" style={optionsRowStyle(horizontal)}>
         {options.map((option, index) => (
-          <label key={index} className="flex cursor-pointer items-center gap-2">
+          <label
+            key={index}
+            className={clsx('flex cursor-pointer items-center gap-2', horizontal && 'shrink-0')}
+          >
             <input
               type="checkbox"
               checked={selected.includes(option.value)}
               disabled={Boolean(properties.disabled)}
               onChange={() => toggle(option.value)}
               style={{ accentColor: accentOf(properties) }}
-              className="no-drag h-4 w-4 accent-blue-600"
+              className="no-drag h-4 w-4 shrink-0 accent-blue-600"
             />
-            <span className="truncate text-sm text-slate-700" style={optionStyle}>
+            <span
+              className={horizontal ? 'whitespace-nowrap' : 'min-w-0 truncate'}
+              style={optionStyle}
+            >
               {option.label}
             </span>
           </label>
         ))}
 
-        {options.length === 0 && (
-          <span className="text-xs text-slate-400">Bind options to show choices</span>
+        {options.length === 0 && !dataError && (
+          <span className="text-xs text-slate-400">{emptyChoiceHint(properties)}</span>
         )}
       </div>
+      {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
     </div>
   );
 }
@@ -401,17 +409,17 @@ export const checkboxGroupWidget: RegisteredWidget = {
     displayName: 'Checkbox Group',
     category: 'input',
     icon: 'checks',
-    defaultLayout: { x: 0, y: 0, w: 5, h: 5 },
+    defaultLayout: { x: 0, y: 0, w: 10, h: 4 },
     minSize: { w: 2, h: 2 },
     events: [{ key: 'onChange', label: 'On change', payloadKeys: ['value'] }],
     exposedState: [{ key: 'value', type: 'array', description: 'Selected values' }],
     properties: [
-      { name: 'Data', properties: optionProperties },
+      { name: 'Data', properties: CHOICE_SOURCE_PROPERTIES },
       {
         name: 'Content',
         properties: [
           ...CHECKS_STYLE.content,
-          { key: 'direction', label: 'Direction', control: 'select', expectedType: 'string', bindable: false, defaultValue: 'vertical' },
+          DIRECTION_PROPERTY,
         ],
       },
       ...CHECKS_STYLE.sections,

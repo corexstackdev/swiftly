@@ -244,6 +244,12 @@ function CanvasGrid({
   );
 
   const draggingRef = useRef(false);
+  const skipLayoutEchoRef = useRef(false);
+  const lastFitVersion = useRef(fitVersion);
+  if (lastFitVersion.current !== fitVersion) {
+    lastFitVersion.current = fitVersion;
+    skipLayoutEchoRef.current = true;
+  }
 
   const commitLayout = useCallback(
     (next: Layout[]) => {
@@ -289,9 +295,11 @@ function CanvasGrid({
       isDroppable={false}
       onDragStart={() => {
         draggingRef.current = true;
+        skipLayoutEchoRef.current = false;
       }}
       onResizeStart={() => {
         draggingRef.current = true;
+        skipLayoutEchoRef.current = false;
       }}
       onDragStop={(next) => {
         draggingRef.current = false;
@@ -307,6 +315,14 @@ function CanvasGrid({
         // new `layout` prop, which snaps the item to the origin and stacks it
         // on its siblings.
         if (draggingRef.current) return;
+        // A remount after a property-panel size change echoes the previous
+        // internal layout once. Taking that echo would undo 2× / 3×.
+        if (skipLayoutEchoRef.current) {
+          // Keep ignoring until RGL reports the size we just authored. Clearing
+          // on the first callback lets a second stale echo undo 2× / 3×.
+          if (!layoutDiffered(layout, next)) skipLayoutEchoRef.current = false;
+          return;
+        }
         if (!layoutDiffered(layout, next)) return;
         commitLayout(next);
       }}
@@ -314,6 +330,13 @@ function CanvasGrid({
       // left grip, or any chrome that is not the field itself.
       draggableCancel=".no-drag, .nested-canvas, input, textarea, select"
       resizeHandles={RESIZE_HANDLES}
+      resizeHandle={(axis, handleRef) => (
+        <span
+          ref={handleRef}
+          aria-hidden="true"
+          className={`react-resizable-handle react-resizable-handle-${axis}`}
+        />
+      )}
     >
       {widgets.map((widget) => (
         <div
@@ -323,11 +346,14 @@ function CanvasGrid({
             event.stopPropagation();
             handlers.onSelect(widget.id);
           }}
+          id={widget.id}
+          data-widget-name={widget.name}
           className={clsx(
             'group relative rounded outline-offset-2 transition-shadow',
             handlers.selectedWidgetId === widget.id
               ? 'is-selected outline-2 outline-blue-500'
               : 'hover:outline hover:outline-1 hover:outline-blue-300',
+            String(runtime.properties(widget.name).className ?? ''),
           )}
         >
           <WidgetDragGrip />
@@ -422,6 +448,12 @@ function DesignWidget({
       <div
         className="nested-canvas h-full w-full"
         data-drop-parent={widget.id}
+        onDragOver={(event) => acceptPaletteDrag(event)}
+        onDrop={(event) => {
+          const type = takePaletteDrop(event);
+          if (!type) return;
+          handlers.onDropIntoContainer(widget.id, type);
+        }}
         onClick={(event) => {
           event.stopPropagation();
           const hit = (event.target as HTMLElement).closest('[data-canvas-widget]');
@@ -511,16 +543,20 @@ function DesignChild({
   return (
     <div
       data-canvas-widget={child.id}
+      id={child.id}
+      data-widget-name={child.name}
       onClick={(event) => {
         event.stopPropagation();
         handlers.onSelect(child.id);
       }}
       className={clsx(
         'group/cell group relative h-full w-full rounded outline-offset-2',
-        isSelected ? 'outline-2 outline-blue-500' : 'hover:outline hover:outline-1 hover:outline-blue-300',
+        isSelected
+          ? 'is-selected outline-2 outline-blue-500'
+          : 'hover:outline hover:outline-1 hover:outline-blue-300',
+        String(runtime.properties(child.name).className ?? ''),
       )}
     >
-      <WidgetDragGrip />
       <WidgetLabel
         widget={child}
         selected={isSelected}
@@ -532,7 +568,7 @@ function DesignChild({
       <GridChildResizer
         child={child}
         selected={isSelected}
-        onCommit={(patch) => handlers.onUpdateProperties(child.id, patch)}
+        onCommit={(patch) => handlers.onUpdateProperties(child.id, { ...patch })}
       >
         <DesignWidget
           widget={child}
@@ -587,7 +623,7 @@ function WidgetDeleteButton({ name, onDelete }: { name: string; onDelete: () => 
       type="button"
       title={`Delete ${name}`}
       aria-label={`Delete ${name}`}
-      className="no-drag absolute top-1 right-1 z-40 flex items-center gap-1 rounded border border-red-200 bg-white px-1.5 py-1 text-[11px] font-medium text-red-600 shadow-sm hover:bg-red-50"
+      className="no-drag absolute -top-5 right-0 z-40 flex items-center gap-1 rounded-t border border-red-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-red-600 shadow-sm hover:bg-red-50"
       onClick={(event) => {
         event.stopPropagation();
         onDelete();
