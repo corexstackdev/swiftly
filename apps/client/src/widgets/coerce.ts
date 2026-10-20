@@ -102,7 +102,20 @@ export function sourceDataError(value: unknown): string | null {
  * without the copy.
  */
 export function asRows(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) return value as Record<string, unknown>[];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      if (isRow(entry)) return [entry];
+      if (Array.isArray(entry)) {
+        const object: Record<string, unknown> = {};
+        entry.forEach((cell, index) => {
+          object[`column_${index + 1}`] = cell;
+        });
+        return [object];
+      }
+      if (entry === null || entry === undefined) return [];
+      return [{ value: entry }];
+    });
+  }
 
   if (typeof value === 'string') {
     const text = value.trim();
@@ -117,7 +130,7 @@ export function asRows(value: unknown): Record<string, unknown>[] {
   if (value !== null && typeof value === 'object') {
     const record = value as Record<string, unknown>;
     for (const key of ['data', 'rows', 'items']) {
-      if (Array.isArray(record[key])) return record[key] as Record<string, unknown>[];
+      if (Array.isArray(record[key])) return asRows(record[key]);
     }
   }
 
@@ -126,5 +139,5 @@ export function asRows(value: unknown): Record<string, unknown>[] {
 
 /** One row, when a caller needs to be sure it really is an object. */
 export function isRow(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

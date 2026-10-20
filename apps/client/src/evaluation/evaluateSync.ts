@@ -1,3 +1,5 @@
+import { isBinding, parseBinding } from './parser';
+
 /**
  * Synchronous expression evaluation, for the bindings a query needs at the moment
  * it runs.
@@ -59,4 +61,40 @@ export function writePath(
     cursor = (cursor[segment] ??= {}) as Record<string, unknown>;
   }
   cursor[rest[rest.length - 1]!] = value;
+}
+
+/**
+ * Resolve a stored action field: a fully-wrapped `{{ expr }}` becomes the
+ * expression's value (an object stays an object); mixed text interpolates to a
+ * string; anything else is returned as stored.
+ */
+export function resolveValue(value: unknown, scope: Record<string, unknown>): unknown {
+  if (typeof value !== 'string' || !isBinding(value)) return value;
+
+  const parsed = parseBinding(value);
+  const fullyWrapped =
+    parsed.expressions.length === 1 && parsed.parts.every((part) => part === '');
+  if (fullyWrapped) {
+    return evaluateExpression(parsed.expressions[0]!, scope).value;
+  }
+
+  let result = parsed.parts[0] ?? '';
+  for (let index = 0; index < parsed.expressions.length; index += 1) {
+    const outcome = evaluateExpression(parsed.expressions[index]!, scope).value;
+    result += (outcome == null ? '' : String(outcome)) + (parsed.parts[index + 1] ?? '');
+  }
+  return result;
+}
+
+/** True when `enabledWhen` is empty or the expression is truthy. */
+export function isActionEnabled(enabledWhen: string | undefined, scope: Record<string, unknown>): boolean {
+  const when = enabledWhen?.trim();
+  if (!when) return true;
+
+  if (isBinding(when)) {
+    return Boolean(resolveValue(when, scope));
+  }
+
+  const outcome = evaluateExpression(when, scope);
+  return outcome.error ? false : Boolean(outcome.value);
 }

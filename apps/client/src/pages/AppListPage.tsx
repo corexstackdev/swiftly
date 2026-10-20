@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
-import { api, type ApplicationSummary, type Workspace } from '@/lib/api';
+import { api, type ApplicationReleaseSummary, type ApplicationSummary, type Workspace } from '@/lib/api';
 import { useSession } from '@/lib/session';
 import { AppHeader } from '@/shell/AppHeader';
 import { formatAbsolute, formatRelative } from '@/lib/relativeTime';
+import { publishedAppPath } from '@/lib/paths';
 
 /**
  * The application home screen.
@@ -48,7 +49,6 @@ export function AppListPage() {
 
   const [apps, setApps] = useState<ApplicationSummary[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [reviewCount, setReviewCount] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,17 +73,6 @@ export function AppListPage() {
   }, []);
 
   useEffect(load, [load]);
-
-  // The queue badge is a reviewer's reason to come to this screen at all, so it
-  // is fetched here rather than only on the review page itself. A failure is
-  // silent: a missing count must not take the application list down with it.
-  useEffect(() => {
-    if (!can('app:publish')) return;
-    api.publish
-      .pending()
-      .then((pending) => setReviewCount(pending.length))
-      .catch(() => setReviewCount(undefined));
-  }, [can]);
 
   useEffect(() => {
     try {
@@ -118,8 +107,15 @@ export function AppListPage() {
     const filtered = apps.filter((app) => {
       if (workspaceId !== 'all' && app.workspaceId !== workspaceId) return false;
 
-      if (status === 'published' && !app.publishedVersionId) return false;
-      if (status === 'draft' && (app.publishedVersionId || app.status === 'ARCHIVED')) return false;
+      if (status === 'published' && (app.releases?.length ?? 0) === 0 && !app.publishedVersionId) {
+        return false;
+      }
+      if (
+        status === 'draft' &&
+        ((app.releases?.length ?? 0) > 0 || app.publishedVersionId || app.status === 'ARCHIVED')
+      ) {
+        return false;
+      }
       if (status === 'archived' && app.status !== 'ARCHIVED') return false;
 
       if (!needle) return true;
@@ -155,7 +151,7 @@ export function AppListPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <AppHeader reviewCount={reviewCount} />
+      <AppHeader />
 
       <main className="px-6 pb-16">
         <div className="flex flex-wrap items-end justify-between gap-3 pt-8 pb-5">
@@ -331,8 +327,15 @@ function AppEntry({
   const { can } = useSession();
 
   const editorPath = `/apps/${app.id}/edit`;
+  const releases = app.releases ?? [];
+  const defaultRelease =
+    releases.find((release) => release.isProduction) ?? releases[0];
   const publishedPath =
-    app.publishedVersionId && workspace ? `/app/${workspace.slug}/${app.slug}` : null;
+    defaultRelease && workspace
+      ? publishedAppPath(workspace.slug, app.slug, defaultRelease.environmentName)
+      : app.publishedVersionId && workspace
+        ? publishedAppPath(workspace.slug, app.slug)
+        : null;
   const target = can('app:edit') ? editorPath : publishedPath;
 
   const meta = (
@@ -383,6 +386,8 @@ function AppEntry({
             app={app}
             editorPath={editorPath}
             publishedPath={publishedPath}
+            publishedReleases={releases}
+            workspaceSlug={workspace?.slug}
             onDelete={onDelete}
           />
         </div>
@@ -415,6 +420,8 @@ function AppEntry({
             app={app}
             editorPath={editorPath}
             publishedPath={publishedPath}
+            publishedReleases={releases}
+            workspaceSlug={workspace?.slug}
             onDelete={onDelete}
           />
         </div>
@@ -460,8 +467,18 @@ function StatusBadge({ app }: { app: ApplicationSummary }) {
   if (app.status === 'ARCHIVED') {
     return <Badge className="bg-slate-100 text-slate-500">Archived</Badge>;
   }
-  if (app.publishedVersionId) {
-    return <Badge className="bg-emerald-100 text-emerald-700">Published</Badge>;
+  const releases = app.releases ?? [];
+  if (releases.length > 0 || app.publishedVersionId) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1">
+        <Badge className="bg-emerald-100 text-emerald-700">Published</Badge>
+        {releases.map((release) => (
+          <Badge key={release.environmentId} className="bg-slate-100 text-slate-600">
+            {release.environmentName}
+          </Badge>
+        ))}
+      </span>
+    );
   }
   return <Badge className="bg-amber-100 text-amber-700">Draft</Badge>;
 }
@@ -490,11 +507,15 @@ function EntryMenu({
   app,
   editorPath,
   publishedPath,
+  publishedReleases,
+  workspaceSlug,
   onDelete,
 }: {
   app: ApplicationSummary;
   editorPath: string;
   publishedPath: string | null;
+  publishedReleases: ApplicationReleaseSummary[];
+  workspaceSlug: string | undefined;
   onDelete: () => void;
 }) {
   const { can } = useSession();
@@ -592,7 +613,17 @@ function EntryMenu({
                   Open in editor
                 </MenuLink>
               )}
-              {publishedPath ? (
+              {publishedReleases.length > 0 && workspaceSlug ? (
+                publishedReleases.map((release) => (
+                  <MenuLink
+                    key={release.environmentId}
+                    to={publishedAppPath(workspaceSlug, app.slug, release.environmentName)}
+                    onNavigate={close}
+                  >
+                    Open {release.environmentName}
+                  </MenuLink>
+                ))
+              ) : publishedPath ? (
                 <MenuLink to={publishedPath} onNavigate={close}>
                   Open published app
                 </MenuLink>
@@ -749,7 +780,7 @@ function CreateDialog({
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="Order Console"
+              placeholder="Application name"
               className="rounded border border-slate-300 px-2.5 py-1.5 text-xs outline-none focus:border-blue-500"
             />
             <span className="text-[11px] text-slate-400">

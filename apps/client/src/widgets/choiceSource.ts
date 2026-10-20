@@ -15,13 +15,19 @@ export interface ChoiceOption {
 
 export function optionsSource(properties: Record<string, unknown>): unknown {
   if (properties.sourceKind === 'js') return properties.sourceJs;
+  if (properties.sourceKind === 'query') return properties.sourceData;
   return properties.sourceData ?? properties.options;
 }
 
-/** Rows for Table (and later List): JSON, a JS function, or the legacy `data` binding. */
+/** Rows for Table (and later List): JSON, a JS function, a query, or the legacy `data` binding. */
 export function rowSource(properties: Record<string, unknown>): unknown {
   if (properties.sourceKind === 'js') return properties.sourceJs;
+  if (properties.sourceKind === 'query') return properties.sourceData;
   return properties.sourceData ?? properties.data;
+}
+
+function queryName(properties: Record<string, unknown>): string {
+  return typeof properties.sourceQuery === 'string' ? properties.sourceQuery.trim() : '';
 }
 
 export function rowSourceConfigured(properties: Record<string, unknown>): boolean {
@@ -29,13 +35,18 @@ export function rowSourceConfigured(properties: Record<string, unknown>): boolea
     const source = properties.sourceJs;
     return source !== undefined && source !== null && source !== '';
   }
+  if (properties.sourceKind === 'query') return queryName(properties) !== '';
   const json = properties.sourceData ?? properties.data;
   return json !== undefined && json !== null && json !== '';
 }
 
 export function emptyRowHint(properties: Record<string, unknown>): string {
   if (properties.sourceKind === 'js') return 'Pick a JavaScript function that returns rows';
-  if (properties.sourceKind === 'query') return 'Query datasources are coming soon';
+  if (properties.sourceKind === 'query') {
+    return queryName(properties)
+      ? 'Waiting for the query to return rows'
+      : 'Pick a query that returns rows';
+  }
   return 'Paste JSON in Source Data';
 }
 
@@ -63,9 +74,13 @@ export function choiceSourceError(properties: Record<string, unknown>): string |
 }
 
 export function emptyChoiceHint(properties: Record<string, unknown>): string {
-  return properties.sourceKind === 'js'
-    ? 'Pick a JavaScript function that returns options'
-    : 'Paste JSON in Source Data';
+  if (properties.sourceKind === 'js') return 'Pick a JavaScript function that returns options';
+  if (properties.sourceKind === 'query') {
+    return queryName(properties)
+      ? 'Waiting for the query to return options'
+      : 'Pick a query that returns options';
+  }
+  return 'Paste JSON in Source Data';
 }
 
 /** Data-section fields: JSON or a JS function, plus label/value keys. */
@@ -80,9 +95,10 @@ export const CHOICE_SOURCE_PROPERTIES: PropertyDefinition[] = [
     options: [
       { value: 'json', label: 'JSON' },
       { value: 'js', label: 'JavaScript' },
+      { value: 'query', label: 'Query' },
     ],
     helpText:
-      'Paste or bind JSON, or call a JavaScript function that returns the options. SQL functions can be added later.',
+      'Paste or bind JSON, call a JavaScript function, or bind a query that returns rows.',
   },
   {
     key: 'sourceData',
@@ -105,7 +121,16 @@ export const CHOICE_SOURCE_PROPERTIES: PropertyDefinition[] = [
     visibleWhen: { key: 'sourceKind', equals: 'js' },
     placeholder: '{{ Utils.getOptions() }}',
     helpText:
-      'Return an array of values or { label, value } objects. async and fetch() are allowed — return the data, not console.log.',
+      'Return an array of values or { label, value } objects. Pass another field when the list depends on it: {{ dropdowns.shippingcity(Select3.value) }}.',
+  },
+  {
+    key: 'sourceQuery',
+    label: 'Query',
+    control: 'query_picker',
+    expectedType: 'string',
+    bindable: false,
+    visibleWhen: { key: 'sourceKind', equals: 'query' },
+    helpText: 'Options load from this query’s result as soon as you pick it.',
   },
   {
     key: 'labelKey',
@@ -135,16 +160,6 @@ export const CHOICE_SOURCE_PROPERTIES: PropertyDefinition[] = [
   },
 ];
 
-const TABLE_SAMPLE_JSON = `[
-  { "id": 1041, "customer": "Fabrikam", "region": "APAC", "status": "Shipped", "total": 2310.75 },
-  { "id": 1042, "customer": "Northwind Traders", "region": "EMEA", "status": "Picking", "total": 1250 },
-  { "id": 1043, "customer": "Contoso", "region": "EMEA", "status": "Shipped", "total": 890.5 }
-]`;
-
-/**
- * Table Data section: same JSON / JavaScript split as Select, with Query reserved
- * for a later datasource. Legacy `data` bindings still resolve.
- */
 export const ROW_SOURCE_PROPERTIES: PropertyDefinition[] = [
   {
     key: 'sourceKind',
@@ -156,10 +171,10 @@ export const ROW_SOURCE_PROPERTIES: PropertyDefinition[] = [
     options: [
       { value: 'json', label: 'JSON' },
       { value: 'js', label: 'JavaScript' },
-      { value: 'query', label: 'Query — coming soon', disabled: true },
+      { value: 'query', label: 'Query' },
     ],
     helpText:
-      'Paste or bind JSON, or call a JavaScript function that returns rows. Query and other datasources will be added next.',
+      'Paste or bind JSON, call a JavaScript function, or bind a PostgreSQL (or other) query that returns rows.',
   },
   {
     key: 'sourceData',
@@ -167,7 +182,7 @@ export const ROW_SOURCE_PROPERTIES: PropertyDefinition[] = [
     control: 'json',
     expectedType: 'any',
     bindable: true,
-    defaultValue: TABLE_SAMPLE_JSON,
+    defaultValue: '[]',
     placeholder: '[{"id":1,"name":"Ada"}]',
     visibleWhen: { key: 'sourceKind', oneOf: ['json', undefined] },
     helpText:
@@ -183,6 +198,15 @@ export const ROW_SOURCE_PROPERTIES: PropertyDefinition[] = [
     placeholder: '{{ Utils.getRows() }}',
     helpText:
       'Return an array of row objects, or { data: [...] }. async and fetch() are allowed — return the JSON (not console.log).',
+  },
+  {
+    key: 'sourceQuery',
+    label: 'Query',
+    control: 'query_picker',
+    expectedType: 'string',
+    bindable: false,
+    visibleWhen: { key: 'sourceKind', equals: 'query' },
+    helpText: 'Rows load from this query’s result as soon as you pick it.',
   },
   {
     key: 'data',

@@ -1,3 +1,4 @@
+import type { ActionDsl } from '@swiftly/shared';
 import type { ValueFormat } from './formatValue';
 import { asArray, isRow } from './coerce';
 
@@ -12,7 +13,43 @@ import { asArray, isRow } from './coerce';
  * its value comes from `defaultValue` rather than from the row. That is what
  * makes "add a column with a default" a column setting rather than a change to
  * the query behind it.
+ *
+ * `source: 'actions'` is a column of buttons — Edit, Delete, Download — the
+ * builder picks, rather than a value from the row.
  */
+
+export type TableRowActionKind = 'edit' | 'delete' | 'download';
+
+export interface TableRowAction {
+  kind: TableRowActionKind;
+  /** Button label. Falls back to Edit / Delete / Download. */
+  label?: string;
+  /** Download: column holding a URL or the file contents. */
+  downloadKey?: string;
+  /** Download: column holding the file name. */
+  fileNameKey?: string;
+  /** Handlers that run when this button is clicked, in order. */
+  onClick?: ActionDsl[];
+}
+
+export const TABLE_ROW_ACTION_KINDS: {
+  kind: TableRowActionKind;
+  label: string;
+  event: 'onRowEdit' | 'onRowDelete' | 'onRowDownload';
+}[] = [
+  { kind: 'edit', label: 'Edit', event: 'onRowEdit' },
+  { kind: 'delete', label: 'Delete', event: 'onRowDelete' },
+  { kind: 'download', label: 'Download', event: 'onRowDownload' },
+];
+
+export function actionMeta(kind: TableRowActionKind) {
+  return TABLE_ROW_ACTION_KINDS.find((entry) => entry.kind === kind) ?? TABLE_ROW_ACTION_KINDS[0]!;
+}
+
+export function isActionsColumn(column: TableColumnConfig): boolean {
+  return column.source === 'actions';
+}
+
 export interface TableColumnConfig {
   key: string;
   label?: string;
@@ -22,9 +59,11 @@ export interface TableColumnConfig {
   /** Cells can be typed into, and the edit is published rather than written back. */
   editable?: boolean;
   /** Where the cell's value comes from. */
-  source?: 'data' | 'static';
+  source?: 'data' | 'static' | 'actions';
   /** Used by a static column, and by a data column wherever the row has nothing. */
   defaultValue?: unknown;
+  /** Buttons shown when `source` is `actions`. */
+  actions?: TableRowAction[];
 
   /* Presentation, shared with the Text widget's formatter. */
   format?: ValueFormat;
@@ -43,6 +82,9 @@ export function normaliseColumns(value: unknown): TableColumnConfig[] {
     const record = entry;
     if (typeof record.key !== 'string' || record.key === '') return [];
 
+    const source =
+      record.source === 'static' || record.source === 'actions' ? record.source : 'data';
+
     return [
       {
         key: record.key,
@@ -50,9 +92,10 @@ export function normaliseColumns(value: unknown): TableColumnConfig[] {
         width: Number.isFinite(Number(record.width)) ? Number(record.width) : undefined,
         hidden: record.hidden === true,
         align: (['left', 'center', 'right'] as const).find((a) => a === record.align),
-        editable: record.editable === true,
-        source: record.source === 'static' ? 'static' : 'data',
+        editable: source === 'actions' ? false : record.editable === true,
+        source,
         defaultValue: record.defaultValue,
+        actions: source === 'actions' ? normaliseActions(record.actions) : undefined,
         format: record.format as ValueFormat | undefined,
         decimals: Number.isFinite(Number(record.decimals)) ? Number(record.decimals) : undefined,
         currency: typeof record.currency === 'string' ? record.currency : undefined,
@@ -63,6 +106,55 @@ export function normaliseColumns(value: unknown): TableColumnConfig[] {
       },
     ];
   });
+}
+
+function normaliseActions(value: unknown): TableRowAction[] {
+  const allowed = new Set<TableRowActionKind>(['edit', 'delete', 'download']);
+  const seen = new Set<TableRowActionKind>();
+  const actions: TableRowAction[] = [];
+
+  for (const entry of asArray(value)) {
+    if (!isRow(entry)) continue;
+    const kind = entry.kind as TableRowActionKind;
+    if (!allowed.has(kind) || seen.has(kind)) continue;
+    seen.add(kind);
+    actions.push({
+      kind,
+      label: typeof entry.label === 'string' && entry.label.trim() !== '' ? entry.label : undefined,
+      downloadKey: typeof entry.downloadKey === 'string' ? entry.downloadKey : undefined,
+      fileNameKey: typeof entry.fileNameKey === 'string' ? entry.fileNameKey : undefined,
+      onClick: normaliseHandlers(entry.onClick),
+    });
+  }
+
+  const order = TABLE_ROW_ACTION_KINDS.map((entry) => entry.kind);
+  return actions.sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind));
+}
+
+function normaliseHandlers(value: unknown): ActionDsl[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const handlers = value.filter(
+    (entry): entry is ActionDsl =>
+      Boolean(entry) && typeof entry === 'object' && typeof (entry as { type?: unknown }).type === 'string',
+  );
+  return handlers.length > 0 ? handlers : undefined;
+}
+
+export function defaultActionsColumn(existing: TableColumnConfig[]): TableColumnConfig {
+  let index = 1;
+  let key = 'actions';
+  while (existing.some((column) => column.key === key)) {
+    index += 1;
+    key = `actions${index}`;
+  }
+  return {
+    key,
+    label: 'Actions',
+    source: 'actions',
+    width: 168,
+    align: 'right',
+    actions: [{ kind: 'edit' }, { kind: 'delete' }],
+  };
 }
 
 /**
@@ -80,10 +172,41 @@ export function normaliseColumns(value: unknown): TableColumnConfig[] {
 export function resolveColumns(
   configured: TableColumnConfig[],
   firstRow: Record<string, unknown> | undefined,
+  sourceColumns: string[] = [],
 ): TableColumnConfig[] {
-  if (configured.length > 0) return configured.filter((column) => !column.hidden);
+  const rowKeys =
+    firstRow && typeof firstRow === 'object' && !Array.isArray(firstRow)
+      ? Object.keys(firstRow)
+      : [];
+  const dataKeys = uniqueKeys([...sourceColumns, ...rowKeys]);
+  const visible = configured.filter((column) => !column.hidden);
 
-  return Object.keys(firstRow ?? {}).map((key) => ({ key, source: 'data' as const }));
+  if (visible.length === 0) {
+    return dataKeys.map((key) => ({ key, source: 'data' as const }));
+  }
+
+  const known = new Set(visible.map((column) => column.key));
+  const missing = dataKeys.filter((key) => !known.has(key));
+  if (missing.length === 0) return visible;
+
+  const actions = visible.filter((column) => column.source === 'actions');
+  const rest = visible.filter((column) => column.source !== 'actions');
+  return [
+    ...rest,
+    ...missing.map((key) => ({ key, source: 'data' as const })),
+    ...actions,
+  ];
+}
+
+function uniqueKeys(keys: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const key of keys) {
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(key);
+  }
+  return unique;
 }
 
 /** The raw value behind one cell, before any formatting. */
@@ -91,6 +214,7 @@ export function cellValue(
   row: Record<string, unknown>,
   column: TableColumnConfig,
 ): unknown {
+  if (column.source === 'actions') return undefined;
   if (column.source === 'static') return column.defaultValue;
 
   const value = isRow(row) ? row[column.key] : undefined;

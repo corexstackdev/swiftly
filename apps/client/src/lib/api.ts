@@ -1,4 +1,13 @@
-import type { ApplicationDsl, DbSchema, QueryResult, TestResult } from '@swiftly/shared';
+import type {
+  ApplicationDsl,
+  ColumnPatch,
+  ColumnSpec,
+  CreateTableInput,
+  DbSchema,
+  QueryResult,
+  TableRowsPage,
+  TestResult,
+} from '@swiftly/shared';
 
 /**
  * API client.
@@ -82,6 +91,14 @@ export interface SessionUser {
   permissions: string[];
 }
 
+export interface ApplicationReleaseSummary {
+  environmentId: string;
+  environmentName: string;
+  isProduction: boolean;
+  versionNumber: number;
+  publishedAt: string;
+}
+
 export interface ApplicationSummary {
   id: string;
   name: string;
@@ -93,12 +110,30 @@ export interface ApplicationSummary {
   workspaceId: string;
   publishedVersionId: string | null;
   createdBy: { id: string; name: string };
+  releases?: ApplicationReleaseSummary[];
 }
 
 export interface ApplicationDetail extends ApplicationSummary {
   draftDsl: ApplicationDsl;
   draftRevision: number;
   publishedVersion: { id: string; versionNumber: number; publishedAt: string | null } | null;
+  workspace: { slug: string };
+}
+
+export interface RuntimeAppPayload {
+  applicationId: string;
+  name: string;
+  workspaceSlug: string;
+  appSlug: string;
+  environmentId: string;
+  dsl: ApplicationDsl;
+}
+
+export interface PublishedAppPayload extends RuntimeAppPayload {
+  versionNumber: number;
+  publishedAt: string | null;
+  environmentName: string;
+  releases: ApplicationReleaseSummary[];
 }
 
 export interface Workspace {
@@ -224,11 +259,150 @@ export const api = {
       put<{ ok: true }>(`/datasources/${id}/config`, { environmentId, config }),
     test: (id: string, environmentId: string) =>
       post<TestResult>(`/datasources/${id}/test`, { environmentId }),
+    testConnection: (pluginId: string, config: Record<string, unknown>) =>
+      post<TestResult>('/datasources/test-connection', { pluginId, config }),
     remove: (id: string) => request<{ ok: true }>(`/datasources/${id}`, { method: 'DELETE' }),
     schema: (id: string, environmentId: string, refresh = false) =>
       request<DbSchema>(
         `/datasources/${id}/schema?environmentId=${environmentId}&refresh=${refresh}`,
       ),
+    createSchema: (id: string, environmentId: string, name: string) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/schemas`, { environmentId, name }),
+    dropSchema: (id: string, environmentId: string, name: string, cascade?: boolean) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/schemas/drop`, {
+        environmentId,
+        name,
+        cascade,
+      }),
+    createTable: (id: string, environmentId: string, input: CreateTableInput) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/tables`, { environmentId, ...input }),
+    dropTable: (id: string, environmentId: string, schema: string, table: string) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/tables/drop`, {
+        environmentId,
+        schema,
+        table,
+      }),
+    renameTable: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      newName: string,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/tables/rename`, {
+        environmentId,
+        schema,
+        table,
+        newName,
+      }),
+    addColumn: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      column: ColumnSpec,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/columns`, {
+        environmentId,
+        schema,
+        table,
+        column,
+      }),
+    alterColumn: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      name: string,
+      patch: ColumnPatch,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/columns/alter`, {
+        environmentId,
+        schema,
+        table,
+        name,
+        patch,
+      }),
+    dropColumn: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      name: string,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/columns/drop`, {
+        environmentId,
+        schema,
+        table,
+        name,
+      }),
+    renameColumn: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      name: string,
+      newName: string,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/columns/rename`, {
+        environmentId,
+        schema,
+        table,
+        name,
+        newName,
+      }),
+    tableRows: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      limit = 50,
+      offset = 0,
+    ) =>
+      request<TableRowsPage>(
+        `/datasources/${id}/manage/rows?environmentId=${environmentId}&schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}&limit=${limit}&offset=${offset}`,
+      ),
+    insertRow: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      values: Record<string, unknown>,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/rows`, {
+        environmentId,
+        schema,
+        table,
+        values,
+      }),
+    updateRow: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      key: Record<string, unknown>,
+      values: Record<string, unknown>,
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/rows/update`, {
+        environmentId,
+        schema,
+        table,
+        key,
+        values,
+      }),
+    deleteRows: (
+      id: string,
+      environmentId: string,
+      schema: string,
+      table: string,
+      keys: Record<string, unknown>[],
+    ) =>
+      post<{ ok: true }>(`/datasources/${id}/manage/rows/delete`, {
+        environmentId,
+        schema,
+        table,
+        keys,
+      }),
   },
 
   queries: {
@@ -239,6 +413,7 @@ export const api = {
       input: {
         source: 'draft' | 'published';
         environmentId: string;
+        pageId?: string;
         bindings: Record<string, unknown>;
       },
     ) => post<QueryResult>(`/applications/${applicationId}/queries/${queryName}/execute`, input),
@@ -256,6 +431,12 @@ export const api = {
   },
 
   publish: {
+    publish: (applicationId: string, environmentIds: string[]) =>
+      post<{
+        id: string;
+        versionNumber: number;
+        releases: ApplicationReleaseSummary[];
+      }>(`/applications/${applicationId}/publish`, { environmentIds }),
     submit: (applicationId: string, changeNote?: string) =>
       post<{ id: string; versionNumber: number; status: string }>(
         `/applications/${applicationId}/submit`,
@@ -275,13 +456,49 @@ export const api = {
   },
 
   runtime: {
-    load: (workspaceSlug: string, appSlug: string) =>
-      request<{
-        applicationId: string;
-        name: string;
-        versionNumber: number;
-        publishedAt: string | null;
-        dsl: ApplicationDsl;
-      }>(`/runtime/apps/${workspaceSlug}/${appSlug}`),
+    load: (
+      workspaceSlug: string,
+      appSlug: string,
+      environment?: { name?: string; id?: string },
+    ) =>
+      request<PublishedAppPayload>(
+        environment?.name
+          ? `/runtime/apps/${workspaceSlug}/${appSlug}/${encodeURIComponent(environment.name)}`
+          : `/runtime/apps/${workspaceSlug}/${appSlug}${
+              environment?.id ? `?environmentId=${encodeURIComponent(environment.id)}` : ''
+            }`,
+      ),
+    preview: (workspaceSlug: string, appSlug: string, environmentId?: string) =>
+      request<RuntimeAppPayload>(
+        `/runtime/apps/${workspaceSlug}/${appSlug}/preview${
+          environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : ''
+        }`,
+      ),
+    previewById: (applicationId: string, environmentId?: string) =>
+      request<RuntimeAppPayload>(
+        `/runtime/applications/${applicationId}/preview${
+          environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : ''
+        }`,
+      ),
+    executeQuery: (
+      workspaceSlug: string,
+      appSlug: string,
+      queryName: string,
+      input: { pageId?: string; bindings: Record<string, unknown>; environmentId?: string },
+    ) =>
+      post<QueryResult>(
+        `/runtime/apps/${workspaceSlug}/${appSlug}/queries/${queryName}/execute`,
+        input,
+      ),
+    executePreviewQuery: (
+      workspaceSlug: string,
+      appSlug: string,
+      queryName: string,
+      input: { pageId?: string; bindings: Record<string, unknown>; environmentId?: string },
+    ) =>
+      post<QueryResult>(
+        `/runtime/apps/${workspaceSlug}/${appSlug}/preview/queries/${queryName}/execute`,
+        input,
+      ),
   },
 };

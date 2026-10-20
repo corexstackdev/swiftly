@@ -1,9 +1,22 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { DbSchema, TestResult } from '@swiftly/shared';
+import { ConfigService } from '@nestjs/config';
+import type {
+  ColumnPatch,
+  ColumnSpec,
+  CreateTableInput,
+  DbSchema,
+  SchemaAdmin,
+  TableRowsPage,
+  TestResult,
+} from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PluginRegistry } from '../plugins/plugin.registry';
 import { AuditService } from '../audit/audit.service';
+import {
+  isPlatformPostgresTarget,
+  PLATFORM_POSTGRES_BLOCKED_MESSAGE,
+} from '../plugins/postgres/platform-target';
 
 /** Sent back to the client in place of a stored secret. */
 export const SECRET_PLACEHOLDER = '__swiftly_unchanged__';
@@ -24,6 +37,7 @@ export class DatasourcesService {
     private readonly crypto: CryptoService,
     private readonly registry: PluginRegistry,
     private readonly audit: AuditService,
+    private readonly config: ConfigService,
   ) {}
 
   async list(organizationId: string, workspaceId?: string) {
@@ -37,21 +51,43 @@ export class DatasourcesService {
     });
 
     const usage = await this.countQueryUsage(organizationId);
+    const databaseUrl = this.config.get<string>('DATABASE_URL', '');
 
     // Only the non-secret half of a config ever leaves the server.
-    return datasources.map((datasource) => ({
-      id: datasource.id,
-      name: datasource.name,
-      pluginId: datasource.pluginId,
-      workspaceId: datasource.workspaceId,
-      readOnly: datasource.readOnly,
-      environments: datasource.configs.map((config) => ({
-        environmentId: config.environmentId,
-        config: config.publicConfig,
-      })),
-      schemaCachedAt: datasource.schemaCachedAt,
-      usage: usage.get(datasource.id) ?? { queryCount: 0, applications: [] },
-    }));
+    return datasources
+      .filter((datasource) => {
+        if (datasource.pluginId !== 'postgres') return true;
+        return !datasource.configs.some((entry) => {
+          const config = entry.publicConfig as {
+            host?: string;
+            port?: number;
+            database?: string;
+            replicaHost?: string;
+          };
+          return isPlatformPostgresTarget(
+            {
+              host: config.host ?? '',
+              port: Number(config.port ?? 5432),
+              database: config.database ?? '',
+              replicaHost: config.replicaHost,
+            },
+            databaseUrl,
+          );
+        });
+      })
+      .map((datasource) => ({
+        id: datasource.id,
+        name: datasource.name,
+        pluginId: datasource.pluginId,
+        workspaceId: datasource.workspaceId,
+        readOnly: datasource.readOnly,
+        environments: datasource.configs.map((config) => ({
+          environmentId: config.environmentId,
+          config: config.publicConfig,
+        })),
+        schemaCachedAt: datasource.schemaCachedAt,
+        usage: usage.get(datasource.id) ?? { queryCount: 0, applications: [] },
+      }));
   }
 
   /**
@@ -105,6 +141,7 @@ export class DatasourcesService {
         errors: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
     }
+    this.assertConnectorAllowed(input.pluginId, parsed.data as Record<string, unknown>);
 
     const { publicConfig, secretConfig } = splitSecrets(
       parsed.data as Record<string, unknown>,
@@ -178,6 +215,7 @@ export class DatasourcesService {
         errors: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
     }
+    this.assertConnectorAllowed(datasource.pluginId, parsed.data as Record<string, unknown>);
 
     const { publicConfig, secretConfig } = splitSecrets(
       parsed.data as Record<string, unknown>,
@@ -251,8 +289,26 @@ export class DatasourcesService {
     environmentId: string,
   ): Promise<TestResult> {
     const resolved = await this.resolveConfig(organizationId, datasourceId, environmentId);
+    this.assertConnectorAllowed(resolved.pluginId, resolved.config);
     const plugin = this.registry.get(resolved.pluginId);
     return plugin.test(resolved.config as never);
+  }
+
+  /** Validates and pings a config that has not been saved yet. */
+  async testDraft(pluginId: string, config: Record<string, unknown>): Promise<TestResult> {
+    const plugin = this.registry.get(pluginId);
+    const parsed = plugin.configSchema.safeParse(config);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        message: 'Invalid datasource configuration',
+        errors: parsed.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+      });
+    }
+    this.assertConnectorAllowed(pluginId, parsed.data as Record<string, unknown>);
+    return plugin.test(parsed.data as never);
   }
 
   async introspect(
@@ -262,6 +318,8 @@ export class DatasourcesService {
     refresh = false,
   ): Promise<DbSchema> {
     const datasource = await this.requireDatasource(organizationId, datasourceId);
+    const resolved = await this.resolveConfig(organizationId, datasourceId, environmentId);
+    this.assertConnectorAllowed(resolved.pluginId, resolved.config);
 
     const cacheAge = datasource.schemaCachedAt
       ? Date.now() - datasource.schemaCachedAt.getTime()
@@ -270,7 +328,6 @@ export class DatasourcesService {
       return datasource.schemaCache as unknown as DbSchema;
     }
 
-    const resolved = await this.resolveConfig(organizationId, datasourceId, environmentId);
     const plugin = this.registry.get(resolved.pluginId);
     if (!plugin.introspect) {
       throw new BadRequestException(`${plugin.name} does not support schema introspection`);
@@ -282,6 +339,206 @@ export class DatasourcesService {
       data: { schemaCache: schema as unknown as object, schemaCachedAt: new Date() },
     });
     return schema;
+  }
+
+  async createSchema(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    name: string,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'createSchema', (admin, config) =>
+      admin.createSchema(config, name),
+    );
+  }
+
+  async dropSchema(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    name: string,
+    cascade?: boolean,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'dropSchema', (admin, config) =>
+      admin.dropSchema(config, name, cascade),
+    );
+  }
+
+  async createTable(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    input: CreateTableInput,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'createTable', (admin, config) =>
+      admin.createTable(config, input),
+    );
+  }
+
+  async dropTable(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'dropTable', (admin, config) =>
+      admin.dropTable(config, schema, table),
+    );
+  }
+
+  async renameTable(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    newName: string,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'renameTable', (admin, config) =>
+      admin.renameTable(config, schema, table, newName),
+    );
+  }
+
+  async addColumn(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    column: ColumnSpec,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'addColumn', (admin, config) =>
+      admin.addColumn(config, schema, table, column),
+    );
+  }
+
+  async alterColumn(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    name: string,
+    patch: ColumnPatch,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'alterColumn', (admin, config) =>
+      admin.alterColumn(config, schema, table, name, patch),
+    );
+  }
+
+  async dropColumn(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    name: string,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'dropColumn', (admin, config) =>
+      admin.dropColumn(config, schema, table, name),
+    );
+  }
+
+  async renameColumn(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    name: string,
+    newName: string,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(organizationId, userId, datasourceId, environmentId, 'renameColumn', (admin, config) =>
+      admin.renameColumn(config, schema, table, name, newName),
+    );
+  }
+
+  async listRows(
+    organizationId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    limit: number,
+    offset: number,
+  ): Promise<TableRowsPage> {
+    const admin = await this.requireSchemaAdmin(organizationId, datasourceId, environmentId, false);
+    try {
+      return await admin.plugin.listRows(admin.config, schema, table, { limit, offset });
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async insertRow(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    values: Record<string, unknown>,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(
+      organizationId,
+      userId,
+      datasourceId,
+      environmentId,
+      'insertRow',
+      (admin, config) => admin.insertRow(config, schema, table, values),
+      { invalidateCache: false },
+    );
+  }
+
+  async updateRow(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    key: Record<string, unknown>,
+    values: Record<string, unknown>,
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(
+      organizationId,
+      userId,
+      datasourceId,
+      environmentId,
+      'updateRow',
+      (admin, config) => admin.updateRow(config, schema, table, key, values),
+      { invalidateCache: false },
+    );
+  }
+
+  async deleteRows(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    schema: string,
+    table: string,
+    keys: Record<string, unknown>[],
+  ): Promise<{ ok: true }> {
+    return this.runSchemaAdmin(
+      organizationId,
+      userId,
+      datasourceId,
+      environmentId,
+      'deleteRows',
+      (admin, config) => admin.deleteRows(config, schema, table, keys),
+      { invalidateCache: false },
+    );
   }
 
   async remove(organizationId: string, userId: string, datasourceId: string) {
@@ -297,6 +554,73 @@ export class DatasourcesService {
       metadata: { name: datasource.name },
     });
     return { ok: true };
+  }
+
+  private async runSchemaAdmin(
+    organizationId: string,
+    userId: string,
+    datasourceId: string,
+    environmentId: string,
+    action: string,
+    work: (admin: SchemaAdmin, config: unknown) => Promise<void>,
+    options?: { invalidateCache?: boolean },
+  ): Promise<{ ok: true }> {
+    const resolved = await this.requireSchemaAdmin(organizationId, datasourceId, environmentId, true);
+    try {
+      await work(resolved.plugin, resolved.config);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
+    if (options?.invalidateCache !== false) {
+      await this.prisma.datasource.update({
+        where: { id: datasourceId },
+        data: { schemaCachedAt: null },
+      });
+    }
+    await this.audit.record({
+      organizationId,
+      actorId: userId,
+      action: `datasource.${action}`,
+      resourceType: 'datasource',
+      resourceId: datasourceId,
+      metadata: { environmentId },
+    });
+    return { ok: true };
+  }
+
+  private async requireSchemaAdmin(
+    organizationId: string,
+    datasourceId: string,
+    environmentId: string,
+    requireWritable: boolean,
+  ): Promise<{ plugin: SchemaAdmin; config: unknown }> {
+    const datasource = await this.requireDatasource(organizationId, datasourceId);
+    if (requireWritable && datasource.readOnly) {
+      throw new BadRequestException('This datasource is read-only');
+    }
+    const resolved = await this.resolveConfig(organizationId, datasourceId, environmentId);
+    this.assertConnectorAllowed(resolved.pluginId, resolved.config);
+    const plugin = this.registry.get(resolved.pluginId);
+    if (!plugin.schemaAdmin) {
+      throw new BadRequestException(`${plugin.name} does not support managing tables from this screen`);
+    }
+    return { plugin: plugin.schemaAdmin, config: resolved.config };
+  }
+
+  private assertConnectorAllowed(pluginId: string, config: Record<string, unknown>): void {
+    if (pluginId !== 'postgres') return;
+    const host = typeof config.host === 'string' ? config.host : '';
+    const database = typeof config.database === 'string' ? config.database : '';
+    const port = Number(config.port ?? 5432);
+    const replicaHost = typeof config.replicaHost === 'string' ? config.replicaHost : undefined;
+    if (
+      isPlatformPostgresTarget(
+        { host, port, database, replicaHost },
+        this.config.get<string>('DATABASE_URL', ''),
+      )
+    ) {
+      throw new BadRequestException(PLATFORM_POSTGRES_BLOCKED_MESSAGE);
+    }
   }
 
   private async requireDatasource(organizationId: string, datasourceId: string) {

@@ -17,26 +17,47 @@ import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';
  * Modal
  * ------------------------------------------------------------------ */
 
+export function isFixedModal(properties: Record<string, unknown>): boolean {
+  return String(properties.size ?? '') === 'fixed';
+}
+
+/** Canvas row pitch (20px row + 8px gap). Used to keep a fixed modal's grid box in step with Height. */
+export function modalRowsFromHeightPx(px: number): number {
+  return Math.max(4, Math.round((px + 8) / 28));
+}
+
+export function modalFixedSize(properties: Record<string, unknown>): { width: number; height: number } {
+  const width = Number(properties.widthPx);
+  const height = Number(properties.heightPx);
+  return {
+    width: Number.isFinite(width) && width >= 240 ? width : 560,
+    height: Number.isFinite(height) && height >= 160 ? height : 420,
+  };
+}
+
 function ModalWidget({ widget, properties, host, isDesignMode, renderChildren }: WidgetProps) {
   const isOpen = host.openModals.includes(widget.name);
+  const fixed = isFixedModal(properties);
+  const box = fixed ? modalFixedSize(properties) : null;
 
   // On the canvas a modal is edited in place: an overlay that only appears when an
   // action opens it would be uneditable, since the builder has no way to trigger
   // the action while designing.
   if (isDesignMode) {
     return (
-      <div className="flex h-full w-full flex-col overflow-hidden rounded border border-slate-300 bg-white shadow-sm">
+      <div className="flex h-full w-full flex-col overflow-visible rounded border border-slate-300 bg-white shadow-sm">
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-1.5">
           <span className="truncate text-xs font-medium text-slate-600">
             {String(properties.title ?? 'Modal')}
           </span>
           <span className="text-[10px] text-slate-400">
-            opens via {'{'}openModal: {widget.name}
-            {'}'}
+            {fixed
+              ? `${box!.width} × ${box!.height}px`
+              : `opens via {openModal: ${widget.name}}`}
           </span>
         </div>
         <div
-          className="relative min-h-0 flex-1"
+          className="relative min-h-0 flex-1 overflow-visible"
           style={{ padding: spacingToCss(properties.padding, 16) }}
         >
           {renderChildren?.()}
@@ -59,11 +80,22 @@ function ModalWidget({ widget, properties, host, isDesignMode, renderChildren }:
     >
       <div
         onClick={(event) => event.stopPropagation()}
+        style={
+          box
+            ? {
+                width: box.width,
+                height: box.height,
+                maxWidth: 'calc(100vw - 2rem)',
+                maxHeight: '85vh',
+              }
+            : undefined
+        }
         className={clsx(
-          'flex max-h-[85vh] w-full flex-col overflow-hidden rounded-lg bg-white shadow-xl',
-          width === 'small' && 'max-w-sm',
-          width === 'medium' && 'max-w-lg',
-          width === 'large' && 'max-w-3xl',
+          'flex flex-col overflow-hidden rounded-lg bg-white shadow-xl',
+          !box && 'max-h-[85vh] w-full',
+          !box && width === 'small' && 'max-w-sm',
+          !box && width === 'medium' && 'max-w-lg',
+          !box && width === 'large' && 'max-w-3xl',
         )}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3">
@@ -110,7 +142,42 @@ export const modalWidget: RegisteredWidget = {
         name: 'Content',
         properties: [
           { key: 'title', label: 'Title', control: 'text', expectedType: 'string', bindable: true, defaultValue: 'Details' },
-          { key: 'size', label: 'Size', control: 'select', expectedType: 'string', bindable: false, defaultValue: 'medium' },
+          {
+            key: 'size',
+            label: 'Size',
+            control: 'select',
+            expectedType: 'string',
+            bindable: false,
+            defaultValue: 'medium',
+            options: [
+              { value: 'small', label: 'Small' },
+              { value: 'medium', label: 'Medium' },
+              { value: 'large', label: 'Large' },
+              { value: 'fixed', label: 'Fixed' },
+            ],
+            helpText:
+              'Small, medium and large hug their contents. Fixed uses a width and height you set — drag the modal on the canvas to resize it.',
+          },
+          {
+            key: 'widthPx',
+            label: 'Width',
+            control: 'number',
+            expectedType: 'number',
+            bindable: false,
+            defaultValue: 560,
+            visibleWhen: { key: 'size', equals: 'fixed' },
+            helpText: 'Pixels. Drag the sides of the modal on the canvas, or type a size here.',
+          },
+          {
+            key: 'heightPx',
+            label: 'Height',
+            control: 'number',
+            expectedType: 'number',
+            bindable: false,
+            defaultValue: 420,
+            visibleWhen: { key: 'size', equals: 'fixed' },
+            helpText: 'Pixels. Drag the bottom edge on the canvas, or type a size here.',
+          },
           { key: 'padding', label: 'Padding', control: 'spacing', expectedType: 'any', bindable: false, defaultValue: 16 },
         ],
       },

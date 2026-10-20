@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import {
   jsObjectsOnPage,
+  queriesOnPage,
   type ApplicationDsl,
   type PropertyDefinition,
   type ValidationRule,
@@ -11,9 +12,10 @@ import { getWidgetDefinition } from '@/widgets/registry';
 import { TabListEditor, normaliseTabs } from './TabListEditor';
 import { SpacingEditor } from './SpacingEditor';
 import { ColumnConfigEditor } from './ColumnConfigEditor';
+import { ActionEditor } from './ActionEditor';
 import { asRows } from '@/widgets/coerce';
 import { Select, control, controlCompact, dashedButton, ghostButton } from './controls';
-import { jsCallBinding, listJsFunctions, pathFromJsCall } from './jsObjectOps';
+import { jsCallBinding, jsObjectCompileErrors, listJsFunctions, pathFromJsCall } from './jsObjectOps';
 import { gridCanvasScale } from './gridCells';
 
 /**
@@ -31,10 +33,12 @@ export function PropertyPanel({
   dsl,
   pageId,
   evaluated,
+  resolvedProperties,
   onChange,
   onLayout,
   onRename,
   onDelete,
+  onImportFromTable,
 }: {
   widget: WidgetDsl | null;
   /** The container holding this widget, if any. Drives layout-slot properties. */
@@ -42,6 +46,8 @@ export function PropertyPanel({
   dsl: ApplicationDsl;
   pageId: string;
   evaluated: Record<string, { value: unknown; error?: { message: string } }>;
+  /** Live widget properties as the canvas sees them, including query rows. */
+  resolvedProperties?: Record<string, unknown>;
   onChange: (key: string, value: unknown) => void;
   /** Page-canvas size of the selected widget, used for Grid 1× / 2× / 3×. */
   onLayout?: (patch: {
@@ -53,6 +59,7 @@ export function PropertyPanel({
   }) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onImportFromTable?: () => void;
 }) {
   if (!widget) {
     return (
@@ -79,10 +86,12 @@ export function PropertyPanel({
       dsl={dsl}
       pageId={pageId}
       evaluated={evaluated}
+      resolvedProperties={resolvedProperties}
       onChange={onChange}
       onLayout={onLayout}
       onRename={onRename}
       onDelete={onDelete}
+      onImportFromTable={onImportFromTable}
     />
   );
 }
@@ -97,10 +106,12 @@ function PropertyPanelBody({
   dsl,
   pageId,
   evaluated,
+  resolvedProperties,
   onChange,
   onLayout,
   onRename,
   onDelete,
+  onImportFromTable,
 }: {
   widget: WidgetDsl;
   parent: WidgetDsl | null;
@@ -108,6 +119,7 @@ function PropertyPanelBody({
   dsl: ApplicationDsl;
   pageId: string;
   evaluated: Record<string, { value: unknown; error?: { message: string } }>;
+  resolvedProperties?: Record<string, unknown>;
   onChange: (key: string, value: unknown) => void;
   onLayout?: (patch: {
     x?: number;
@@ -118,6 +130,7 @@ function PropertyPanelBody({
   }) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onImportFromTable?: () => void;
 }) {
   const [filter, setFilter] = useState('');
 
@@ -128,9 +141,28 @@ function PropertyPanelBody({
    * retype keys they already have.
    */
   const dataKeys = useMemo(() => {
-    // The evaluated value when the property is bound, the raw one when a list
-    // was pasted in — and through the same coercion the widget uses, so the
-    // editor cannot decide there is no data while the table is showing rows.
+    // Prefer the live properties the canvas uses (query rows land here as soon
+    // as the query returns) so the column editor cannot lag behind the table.
+    const fromResolved = resolvedProperties
+      ? asRows(
+          resolvedProperties.sourceKind === 'query'
+            ? resolvedProperties.sourceData
+            : resolvedProperties.sourceKind === 'js'
+              ? resolvedProperties.sourceJs
+              : (resolvedProperties.sourceJs ??
+                resolvedProperties.sourceData ??
+                resolvedProperties.data ??
+                resolvedProperties.options),
+        )
+      : [];
+    const fromRow = fromResolved[0] ? Object.keys(fromResolved[0]) : [];
+    const reported = Array.isArray(resolvedProperties?.sourceColumns)
+      ? resolvedProperties.sourceColumns.filter((key): key is string => typeof key === 'string')
+      : [];
+    if (fromRow.length > 0 || reported.length > 0) {
+      return [...new Set([...reported, ...fromRow])];
+    }
+
     const evaluation =
       evaluated[`${widget.name}.sourceJs`] ??
       evaluated[`${widget.name}.sourceData`] ??
@@ -147,10 +179,12 @@ function PropertyPanelBody({
     return rows[0] ? Object.keys(rows[0]) : [];
   }, [
     evaluated,
+    resolvedProperties,
     widget.name,
     widget.properties.data,
     widget.properties.sourceData,
     widget.properties.sourceJs,
+    widget.properties.sourceKind,
     widget.properties.options,
   ]);
 
@@ -264,6 +298,22 @@ function PropertyPanelBody({
       )}
 
       <div className="flex-1 overflow-auto">
+        {widget.type === 'form' && onImportFromTable && (
+          <Section title="Generate">
+            <p className="text-[11px] leading-snug text-slate-400">
+              Build this form from a database table. You pick the columns; each one becomes a text,
+              number, date, select, or switch from its type. For a Select, populate options from
+              JSON, JavaScript, or a query. You can still drop extra widgets afterwards.
+            </p>
+            <button
+              type="button"
+              onClick={onImportFromTable}
+              className="self-start rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700"
+            >
+              Import from table…
+            </button>
+          </Section>
+        )}
         {widget.type === 'grid' && (
           <Section title="Size">
             <div className="flex flex-col gap-1">
@@ -708,7 +758,7 @@ function Control({
       return (
         <Select value={String(value ?? '')} onChange={onChange}>
           <option value="">None</option>
-          {dsl.queries.map((query) => (
+          {queriesOnPage(dsl.queries, pageId).map((query) => (
             <option key={query.id} value={query.name}>
               {query.name}
             </option>
@@ -752,7 +802,13 @@ function Control({
 
     case 'column_config':
       return (
-        <ColumnConfigEditor value={value} availableKeys={dataKeys} onChange={onChange} />
+        <ColumnConfigEditor
+          value={value}
+          availableKeys={dataKeys}
+          dsl={dsl}
+          pageId={pageId}
+          onChange={onChange}
+        />
       );
 
     case 'action_list':
@@ -800,7 +856,9 @@ function JsFunctionPicker({
   placeholder?: string;
   onChange: (value: unknown) => void;
 }) {
-  const functions = listJsFunctions(jsObjectsOnPage(dsl.jsObjects, pageId));
+  const visible = jsObjectsOnPage(dsl.jsObjects, pageId);
+  const functions = listJsFunctions(visible);
+  const compileErrors = jsObjectCompileErrors(visible);
   const selected = pathFromJsCall(value);
   const groups = new Map<string, typeof functions>();
   for (const fn of functions) {
@@ -834,7 +892,13 @@ function JsFunctionPicker({
         className={clsx(control, 'resize-y font-mono leading-snug')}
         spellCheck={false}
       />
-      {functions.length === 0 && (
+      {compileErrors.map((entry) => (
+        <span key={entry.name} className="text-[11px] text-red-600">
+          {entry.name} has a syntax error, so its functions are missing from this list. Open the
+          JS tab and fix it.
+        </span>
+      ))}
+      {functions.length === 0 && compileErrors.length === 0 && (
         <span className="text-[11px] text-slate-400">
           Create a JS object on this page, export a function that returns the options, then pick it here.
         </span>
@@ -932,159 +996,6 @@ function ValidationEditor({
 
 const NEEDS_VALUE = new Set(['minLength', 'maxLength', 'min', 'max', 'regex', 'custom', 'matchesField']);
 
-function ActionEditor({
-  actions,
-  dsl,
-  pageId,
-  onChange,
-}: {
-  actions: unknown;
-  dsl: ApplicationDsl;
-  pageId: string;
-  onChange: (actions: unknown) => void;
-}) {
-  const list = Array.isArray(actions) ? (actions as Record<string, unknown>[]) : [];
-  const jsFunctions = listJsFunctions(jsObjectsOnPage(dsl.jsObjects, pageId));
-
-  return (
-    <div className="no-drag flex flex-col gap-1.5">
-      {list.map((action, index) => (
-        <div key={index} className="flex flex-col gap-1 rounded border border-slate-200 bg-slate-50/60 p-1.5">
-          <div className="flex items-center gap-1">
-            <Select
-              value={String(action.type ?? 'runJsFunction')}
-              onChange={(selected) => {
-                const next = [...list];
-                next[index] = { type: selected };
-                onChange(next);
-              }}
-              compact
-            >
-              <option value="runJsFunction">Run JS function</option>
-              <option value="runJs">Run JS</option>
-              <option value="runQuery">Run query</option>
-              <option value="navigate">Navigate</option>
-              <option value="showNotification">Notify</option>
-              <option value="setState">Set state</option>
-            </Select>
-
-            {action.type === 'runQuery' && (
-              <Select
-                value={String(action.queryName ?? '')}
-                onChange={(selected) => {
-                  const next = [...list];
-                  next[index] = { ...action, queryName: selected };
-                  onChange(next);
-                }}
-                compact
-                className="min-w-0"
-              >
-                <option value="">Select a query</option>
-                {dsl.queries.map((query) => (
-                  <option key={query.id} value={query.name}>
-                    {query.name}
-                  </option>
-                ))}
-              </Select>
-            )}
-
-            {action.type === 'runJsFunction' && (
-              <Select
-                value={String(action.path ?? '')}
-                onChange={(selected) => {
-                  const next = [...list];
-                  next[index] = { ...action, path: selected };
-                  onChange(next);
-                }}
-                compact
-                className="min-w-0"
-              >
-                <option value="">Choose a function…</option>
-                {jsFunctions.map((entry) => (
-                  <option key={entry.path} value={entry.path}>
-                    {entry.path}()
-                  </option>
-                ))}
-              </Select>
-            )}
-
-            {action.type === 'navigate' && (
-              <Select
-                value={String((action.to as { pageId?: string })?.pageId ?? '')}
-                onChange={(selected) => {
-                  const next = [...list];
-                  next[index] = { ...action, to: { kind: 'page', pageId: selected } };
-                  onChange(next);
-                }}
-                compact
-                className="min-w-0"
-              >
-                <option value="">Select a page</option>
-                {dsl.pages.map((page) => (
-                  <option key={page.id} value={page.id}>
-                    {page.name}
-                  </option>
-                ))}
-              </Select>
-            )}
-
-            {action.type === 'showNotification' && (
-              <input
-                value={String(action.message ?? '')}
-                onChange={(event) => {
-                  const next = [...list];
-                  next[index] = { ...action, message: event.target.value, variant: action.variant ?? 'success' };
-                  onChange(next);
-                }}
-                placeholder="Message"
-                className={clsx(controlCompact, 'min-w-0 flex-1')}
-              />
-            )}
-
-            <button
-              type="button"
-              onClick={() => onChange(list.filter((_, i) => i !== index))}
-              className={clsx(ghostButton, 'shrink-0 hover:bg-red-50 hover:text-red-600')}
-            >
-              ×
-            </button>
-          </div>
-
-          {action.type === 'runJsFunction' && (
-            <span className="text-[11px] text-slate-400">
-              {jsFunctions.length === 0
-                ? 'Create a JS object, export a function, then pick it here.'
-                : 'The function receives event (source id, name, class, value). Find a control with document.byId(id) or document.byClass(class), then read or set .value.'}
-            </span>
-          )}
-
-          {action.type === 'runJs' && (
-            <textarea
-              rows={3}
-              value={String(action.code ?? '')}
-              placeholder={"document.byId('w_input').value = event.source.value;\n// document.byClass('totals')[0].disabled = false"}
-              onChange={(event) => {
-                const next = [...list];
-                next[index] = { ...action, code: event.target.value };
-                onChange(next);
-              }}
-              className={clsx(control, 'resize-y font-mono leading-snug')}
-              spellCheck={false}
-            />
-          )}
-        </div>
-      ))}
-
-      <button
-        type="button"
-        onClick={() => onChange([...list, { type: 'runJsFunction', path: '' }])}
-        className={dashedButton}
-      >
-        + Add action
-      </button>
-    </div>
-  );
-}
 
 /** Reads the tab list off a Tabs container, tolerating a half-edited JSON value. */
 function tabsOf(parent: WidgetDsl): { id: string; label: string }[] {

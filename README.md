@@ -24,13 +24,6 @@ if you already run PostgreSQL locally.
 pnpm install
 ```
 
-Optional: a sample database to point datasources at while developing. Any Postgres or
-MySQL you already have will do; this is one way to get one:
-
-```bash
-docker compose up -d sample-db
-```
-
 Create your `.env` from the template and generate the two secrets it needs:
 
 ```bash
@@ -99,7 +92,6 @@ on the machine. The platform database is your local PostgreSQL (`swiftlydb` on 5
 | API | 3001 |
 | PostgreSQL (platform, `swiftlydb`) | 5432 |
 | Redis | 6409 |
-| Postgres (sample data, optional Docker) | 5453 |
 
 ## Two things worth knowing before changing anything
 

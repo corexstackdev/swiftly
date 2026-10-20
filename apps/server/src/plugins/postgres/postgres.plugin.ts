@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import { z } from 'zod';
 import type {
@@ -17,6 +18,11 @@ import type {
 } from '@swiftly/shared';
 import { compile, resolveParameters, type CompiledStatement } from '../sql/compiler';
 import { applyIdentifierBindings } from '../sql-binding';
+import {
+  isPlatformPostgresTarget,
+  PLATFORM_POSTGRES_BLOCKED_MESSAGE,
+} from './platform-target';
+import { createPostgresSchemaAdmin } from './schema-admin';
 
 const configSchema = z.object({
   host: z.string().min(1),
@@ -42,10 +48,10 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
   readonly configSchema = configSchema;
   readonly secretFields = ['password', 'sslRootCert'];
   readonly configFields: ConfigFieldDefinition[] = [
-    { key: 'host', label: 'Host', control: 'text', required: true, placeholder: 'db.internal.acme.com', section: 'Connection' },
+    { key: 'host', label: 'Host', control: 'text', required: true, placeholder: 'db.example.com', section: 'Connection' },
     { key: 'port', label: 'Port', control: 'number', defaultValue: 5432, section: 'Connection' },
-    { key: 'database', label: 'Database', control: 'text', required: true, section: 'Connection' },
-    { key: 'user', label: 'User', control: 'text', required: true, section: 'Credentials' },
+    { key: 'database', label: 'Database', control: 'text', required: true, placeholder: 'mydb', section: 'Connection' },
+    { key: 'user', label: 'User', control: 'text', required: true, placeholder: 'postgres', section: 'Credentials' },
     { key: 'password', label: 'Password', control: 'password', secret: true, section: 'Credentials' },
     {
       key: 'ssl', label: 'SSL mode', control: 'select', defaultValue: 'disable', section: 'Security',
@@ -75,13 +81,22 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
     introspection: true,
     readOnlyConnections: true,
     pagination: true,
+    schemaAdmin: true,
   };
 
   private readonly logger = new Logger(PostgresPlugin.name);
   private readonly pools = new Map<string, Pool>();
+  readonly schemaAdmin = createPostgresSchemaAdmin<PostgresConfig>((config, work) =>
+    this.withClient(config, work),
+  );
+
+  constructor(private readonly configService: ConfigService) {}
 
   async test(config: PostgresConfig): Promise<TestResult> {
     const started = Date.now();
+    if (this.isBlocked(config)) {
+      return { ok: false, message: PLATFORM_POSTGRES_BLOCKED_MESSAGE, latencyMs: Date.now() - started };
+    }
     const pool = new Pool({ ...this.toPoolConfig(config), max: 1, connectionTimeoutMillis: 8000 });
     try {
       const result = await pool.query<{ version: string }>('SELECT version()');
@@ -115,6 +130,7 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
     bindings: EvaluatedBindings,
     ctx: ExecutionContext,
   ): Promise<QueryResult> {
+    this.assertAllowed(config);
     const compiled = prepared.payload as CompiledStatement;
     const sql = applyIdentifierBindings(
       compiled.sql,
@@ -146,32 +162,25 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
         await client.query('SELECT set_config($1, $2, true)', [key, value]);
       }
 
+      if (!sql || typeof sql !== 'string') {
+        throw new Error('This query has no SQL to run');
+      }
+
       // rowMode 'array' keeps duplicate column names distinct, which a `SELECT a.id,
       // b.id` would otherwise collapse before the table widget ever sees them.
-      const result = await client.query<unknown[]>({
+      const result = await client.query({
         text: sql,
         values,
         rowMode: 'array',
       });
 
-      const columns: ColumnMetadata[] = (result.fields ?? []).map((field) => ({
-        name: field.name,
-        dataType: String(field.dataTypeID),
-      }));
-
-      const rows = result.rows.slice(0, ctx.maxRows).map((row) => {
-        const object: Record<string, unknown> = {};
-        columns.forEach((column, index) => {
-          object[column.name] = row[index];
-        });
-        return object;
-      });
+      const materialised = materialisePgResult(result, ctx.maxRows);
 
       return {
-        rows,
-        columns,
-        affectedRows: result.rowCount ?? undefined,
-        truncated: result.rows.length > ctx.maxRows,
+        rows: materialised.rows,
+        columns: materialised.columns,
+        affectedRows: materialised.rowCount,
+        truncated: materialised.truncated,
         durationMs: Date.now() - started,
       };
     } finally {
@@ -181,9 +190,17 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
   }
 
   async introspect(config: PostgresConfig): Promise<DbSchema> {
+    this.assertAllowed(config);
     const pool = new Pool({ ...this.toPoolConfig(config), max: 1 });
     try {
-      const [columns, routines] = await Promise.all([
+      const [namespacesResult, columns, routines] = await Promise.all([
+        pool.query<{ schema_name: string }>(
+          `SELECT schema_name
+             FROM information_schema.schemata
+            WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
+              AND schema_name NOT LIKE 'pg\\_%' ESCAPE '\\'
+            ORDER BY schema_name`,
+        ),
         pool.query<{
           table_schema: string;
           table_name: string;
@@ -191,9 +208,35 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
           column_name: string;
           data_type: string;
           is_nullable: string;
+          column_default: string | null;
+          is_identity: string;
+          is_primary_key: boolean;
         }>(
           `SELECT c.table_schema, c.table_name, t.table_type,
-                  c.column_name, c.data_type, c.is_nullable
+                  c.column_name,
+                  CASE
+                    WHEN c.character_maximum_length IS NOT NULL
+                         AND c.data_type IN ('character varying', 'character')
+                      THEN c.data_type || '(' || c.character_maximum_length || ')'
+                    WHEN c.data_type IN ('numeric', 'decimal') AND c.numeric_precision IS NOT NULL
+                      THEN c.data_type || '(' || c.numeric_precision
+                           || COALESCE(', ' || c.numeric_scale, '') || ')'
+                    ELSE c.data_type
+                  END AS data_type,
+                  c.is_nullable,
+                  c.column_default,
+                  c.is_identity,
+                  EXISTS (
+                    SELECT 1
+                      FROM information_schema.table_constraints tc
+                      JOIN information_schema.key_column_usage kcu
+                        ON kcu.constraint_name = tc.constraint_name
+                       AND kcu.table_schema = tc.table_schema
+                     WHERE tc.constraint_type = 'PRIMARY KEY'
+                       AND tc.table_schema = c.table_schema
+                       AND tc.table_name = c.table_name
+                       AND kcu.column_name = c.column_name
+                  ) AS is_primary_key
              FROM information_schema.columns c
              JOIN information_schema.tables t
                ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -251,6 +294,10 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
         return entry;
       };
 
+      for (const row of namespacesResult.rows) {
+        namespaceFor(row.schema_name);
+      }
+
       for (const row of columns.rows) {
         const ns = namespaceFor(row.table_schema);
         let table = ns.tables.get(row.table_name);
@@ -265,6 +312,12 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
           name: row.column_name,
           dataType: row.data_type,
           nullable: row.is_nullable === 'YES',
+          isPrimaryKey: row.is_primary_key,
+          isIdentity:
+            row.is_identity === 'YES' ||
+            (typeof row.column_default === 'string' && row.column_default.startsWith('nextval(')),
+          hasDefault: row.column_default !== null,
+          defaultValue: row.column_default,
         });
       }
 
@@ -300,6 +353,34 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
         this.pools.delete(key);
         await pool.end().catch(() => undefined);
       }
+    }
+  }
+
+  private isBlocked(config: PostgresConfig): boolean {
+    return isPlatformPostgresTarget(config, this.configService.get<string>('DATABASE_URL', ''));
+  }
+
+  private assertAllowed(config: PostgresConfig): void {
+    if (this.isBlocked(config)) {
+      throw new Error(PLATFORM_POSTGRES_BLOCKED_MESSAGE);
+    }
+  }
+
+  private async withClient<T>(
+    config: PostgresConfig,
+    work: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    this.assertAllowed(config);
+    const pool = new Pool({ ...this.toPoolConfig(config), max: 1 });
+    try {
+      const client = await pool.connect();
+      try {
+        return await work(client);
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end().catch(() => undefined);
     }
   }
 
@@ -339,4 +420,95 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * node-pg usually returns `{ rows, fields }`. A multi-statement batch can return
+ * an array of those, and some command tags omit `rows` entirely — both of which
+ * used to throw `Cannot read properties of undefined (reading 'slice')` before
+ * the table ever saw a column name.
+ */
+function materialisePgResult(
+  result: unknown,
+  maxRows: number,
+): {
+  rows: Record<string, unknown>[];
+  columns: ColumnMetadata[];
+  truncated: boolean;
+  rowCount?: number;
+} {
+  const batches = Array.isArray(result) && !hasRows(result) ? result : [result];
+  let chosen: PgBatch | undefined;
+  for (let index = batches.length - 1; index >= 0; index -= 1) {
+    const batch = asPgBatch(batches[index]);
+    if (batch && Array.isArray(batch.rows)) {
+      chosen = batch;
+      break;
+    }
+  }
+  chosen ??= asPgBatch(batches[batches.length - 1]) ?? { rows: [], fields: [] };
+
+  const rawRows = Array.isArray(chosen.rows) ? chosen.rows : [];
+  const fields = chosen.fields ?? [];
+  let columns: ColumnMetadata[] = fields.map((field) => ({
+    name: field.name,
+    dataType: String(field.dataTypeID ?? ''),
+  }));
+
+  if (columns.length === 0) {
+    const fromRow = keysFromRow(rawRows[0]);
+    columns = fromRow.map((name) => ({ name, dataType: 'unknown' }));
+  }
+
+  const truncated = rawRows.length > maxRows;
+  const rows = rawRows.slice(0, maxRows).map((row) => rowToObject(row, columns));
+
+  return {
+    rows,
+    columns,
+    truncated,
+    rowCount: chosen.rowCount ?? undefined,
+  };
+}
+
+type PgBatch = {
+  rows?: unknown[];
+  fields?: { name: string; dataTypeID?: number }[];
+  rowCount?: number | null;
+};
+
+function hasRows(value: unknown): boolean {
+  return Boolean(value) && typeof value === 'object' && 'rows' in (value as object);
+}
+
+function asPgBatch(value: unknown): PgBatch | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  return value as PgBatch;
+}
+
+function keysFromRow(row: unknown): string[] {
+  if (row !== null && typeof row === 'object' && !Array.isArray(row)) {
+    return Object.keys(row as Record<string, unknown>);
+  }
+  return [];
+}
+
+function rowToObject(row: unknown, columns: ColumnMetadata[]): Record<string, unknown> {
+  if (Array.isArray(row)) {
+    const object: Record<string, unknown> = {};
+    if (columns.length > 0) {
+      columns.forEach((column, index) => {
+        object[column.name] = row[index];
+      });
+      return object;
+    }
+    row.forEach((cell, index) => {
+      object[`column_${index + 1}`] = cell;
+    });
+    return object;
+  }
+  if (row !== null && typeof row === 'object') {
+    return row as Record<string, unknown>;
+  }
+  return { value: row };
 }

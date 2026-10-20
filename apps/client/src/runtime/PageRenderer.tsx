@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import type { WidgetDsl } from '@swiftly/shared';
+import type { ActionDsl, WidgetDsl } from '@swiftly/shared';
 import { getWidget } from '@/widgets/registry';
 import type { AppRuntime } from './useAppRuntime';
 
@@ -106,7 +106,11 @@ export function WidgetHost({
           properties={runtime.properties(widget.name)}
           state={runtime.widgetState[widget.name] ?? {}}
           setState={(patch) => runtime.setWidgetState(widget.name, patch)}
-          fireEvent={(event, payload) => runtime.fireEvent(widget.name, event, payload)}
+          fireEvent={(
+            event: string,
+            payload?: Record<string, unknown>,
+            extraActions?: ActionDsl[],
+          ) => runtime.fireEvent(widget.name, event, payload, extraActions)}
           isDesignMode={isDesignMode}
           host={runtimeHost(runtime)}
           children={widget.children}

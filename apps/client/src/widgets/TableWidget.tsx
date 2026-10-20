@@ -7,10 +7,13 @@ import { stateStyleProperties, stateStyleToCss } from './stateStyle';
 import { formatValue } from './formatValue';
 import { asRows, isRow, sourceDataError } from './coerce';
 import {
+  actionMeta,
   cellValue,
+  isActionsColumn,
   normaliseColumns,
   resolveColumns,
   type TableColumnConfig,
+  type TableRowAction,
 } from './tableColumns';
 import {
   emptyRowHint,
@@ -36,21 +39,6 @@ import {
 
 const ROW_HEIGHT = 34;
 
-/**
- * What an unbound table shows while it is being designed.
- *
- * A table with nothing in it cannot be styled: the header colours, the row font,
- * the stripe and the selection are all invisible against no rows. Design mode
- * only, and never when `data` has been set — an empty result is real information.
- */
-const SAMPLE_ROWS: Record<string, unknown>[] = [
-  { id: 1041, customer: 'Fabrikam', region: 'APAC', status: 'Shipped', total: 2310.75, placed: '2026-09-18' },
-  { id: 1042, customer: 'Northwind Traders', region: 'EMEA', status: 'Picking', total: 1250, placed: '2026-09-19' },
-  { id: 1043, customer: 'Contoso', region: 'EMEA', status: 'Shipped', total: 890.5, placed: '2026-09-19' },
-  { id: 1044, customer: 'Tailspin Toys', region: 'AMER', status: 'On hold', total: 430, placed: '2026-09-20' },
-  { id: 1045, customer: 'Litware', region: 'APAC', status: 'Draft', total: 77.25, placed: '2026-09-21' },
-];
-
 type PagingMode = 'scroll' | 'client' | 'server';
 
 function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
@@ -66,14 +54,8 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
   const source = rowSource(properties);
   const sourceError = sourceDataError(source);
   const configured = rowSourceConfigured(properties);
-  const showingSample = !configured && isDesignMode;
 
-  // Memoised on the raw property: `asRows` must not run per render, and its
-  // result must keep the same identity so nothing downstream recomputes.
-  const rows = useMemo<Record<string, unknown>[]>(
-    () => (showingSample ? SAMPLE_ROWS : asRows(source)),
-    [showingSample, source],
-  );
+  const rows = useMemo<Record<string, unknown>[]>(() => asRows(source), [source]);
 
   const pagingMode = String(properties.paging ?? 'scroll') as PagingMode;
   const pageSize = Math.max(1, Number(properties.pageSize ?? 25));
@@ -89,8 +71,11 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
 
   const columns = useMemo(() => {
     const configured = normaliseColumns(properties.columns);
-    return resolveColumns(configured, rows[0]);
-  }, [properties.columns, rows]);
+    const sourceColumns = Array.isArray(properties.sourceColumns)
+      ? properties.sourceColumns.filter((key): key is string => typeof key === 'string')
+      : [];
+    return resolveColumns(configured, rows[0], sourceColumns);
+  }, [properties.columns, properties.sourceColumns, rows]);
 
   /*
    * Filtering and sorting are skipped entirely under server paging: the widget
@@ -107,8 +92,10 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
 
     if (needle !== '') {
       working = working.filter((row) =>
-        columns.some((column) =>
-          String(cellValue(row, column) ?? '').toLowerCase().includes(needle),
+        columns.some(
+          (column) =>
+            !isActionsColumn(column) &&
+            String(cellValue(row, column) ?? '').toLowerCase().includes(needle),
         ),
       );
     }
@@ -181,12 +168,16 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
   const striped = properties.striped === true;
 
   const headerStyle: React.CSSProperties = {
+    fontSize: 14,
     ...textStyleToCss(properties, 'header'),
     ...(readColour(properties, 'headerBackground')
       ? { background: readColour(properties, 'headerBackground') }
       : {}),
   };
-  const rowTextStyle = textStyleToCss(properties, 'row');
+  const rowTextStyle: React.CSSProperties = {
+    fontSize: 14,
+    ...textStyleToCss(properties, 'row'),
+  };
 
   const selectedIndex = typeof state.selectedIndex === 'number' ? state.selectedIndex : -1;
 
@@ -244,6 +235,37 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
     return edit && column.key in edit ? edit[column.key] : cellValue(original, column);
   };
 
+  const rowIdentity = (row: Record<string, unknown>, index: number): string => {
+    const rowKey = String(properties.rowKey ?? '');
+    return rowKey !== '' ? String(row[rowKey]) : String(page * pageSize + index);
+  };
+
+  const runRowAction = (action: TableRowAction, row: Record<string, unknown>, index: number): void => {
+    if (isDesignMode) return;
+    const rowKey = rowIdentity(row, index);
+    setState({
+      selectedIndex: index,
+      selectedRow: row,
+      lastAction: { kind: action.kind, rowKey, index, row },
+    });
+
+    if (action.kind === 'download') downloadFromRow(row, action);
+
+    const meta = actionMeta(action.kind);
+    fireEvent(
+      meta.event,
+      {
+        row,
+        index,
+        rowKey,
+        currentRow: row,
+        action: action.kind,
+        label: action.label ?? meta.label,
+      },
+      action.onClick,
+    );
+  };
+
   /* --- render ------------------------------------------------------ */
 
   const pagerAtTop = properties.pagerPosition === 'top';
@@ -261,21 +283,11 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
   return (
     <div className="flex h-full w-full flex-col overflow-hidden rounded border border-slate-200 bg-white">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-2 py-1.5">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-xs font-medium text-slate-600">
-            {String(properties.title ?? '')}
-          </span>
-          {showingSample && (
-            <span
-              title="Placeholder rows so the table can be styled. They disappear once Source Data or a JavaScript function is set, and never appear in preview or a published app."
-              className="shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold tracking-wide text-amber-700 uppercase"
-            >
-              Sample
-            </span>
-          )}
+        <span className="min-w-0 truncate text-sm font-medium text-slate-600">
+          {String(properties.title ?? '')}
         </span>
         <div className="flex items-center gap-2">
-          <span className="text-xs tabular-nums text-slate-400">
+          <span className="text-sm tabular-nums text-slate-400">
             {totalRows.toLocaleString()} rows
           </span>
           {properties.searchable !== false && !serverPaged && (
@@ -286,7 +298,7 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
                 setPage(0);
               }}
               placeholder="Search"
-              className="w-32 rounded border border-slate-300 px-2 py-0.5 text-xs outline-none focus:border-blue-500"
+              className="w-32 rounded border border-slate-300 px-2 py-0.5 text-sm outline-none focus:border-blue-500"
             />
           )}
         </div>
@@ -308,7 +320,7 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
                     background: undefined,
                   }}
                   onClick={() => {
-                    if (serverPaged || column.source === 'static') return;
+                    if (serverPaged || column.source === 'static' || isActionsColumn(column)) return;
                     setSort((current) =>
                       current?.key === column.key
                         ? current.direction === 'asc'
@@ -318,8 +330,11 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
                     );
                   }}
                   className={clsx(
-                    'border-b border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 select-none',
-                    !serverPaged && column.source !== 'static' && 'cursor-pointer hover:bg-slate-100',
+                    'border-b border-slate-200 px-2 py-1.5 text-sm font-semibold text-slate-600 select-none',
+                    !serverPaged &&
+                      column.source !== 'static' &&
+                      !isActionsColumn(column) &&
+                      'cursor-pointer hover:bg-slate-100',
                   )}
                 >
                   {column.label ?? column.key}
@@ -364,6 +379,27 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
                   )}
                 >
                   {columns.map((column) => {
+                    if (isActionsColumn(column)) {
+                      return (
+                        <td
+                          key={column.key}
+                          style={{
+                            width: column.width,
+                            textAlign: column.align ?? 'right',
+                          }}
+                          className="whitespace-nowrap px-2 py-1 text-sm"
+                        >
+                          <RowActionButtons
+                            actions={column.actions ?? []}
+                            disabled={isDesignMode}
+                            onAction={(action) =>
+                              runRowAction(action, row, virtualRow.index)
+                            }
+                          />
+                        </td>
+                      );
+                    }
+
                     const isEditing =
                       editing?.row === virtualRow.index && editing.key === column.key;
                     const raw = editedValue(virtualRow.index, column);
@@ -383,7 +419,7 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
                           font: 'inherit',
                         }}
                         className={clsx(
-                          'truncate px-2 py-1 text-slate-700',
+                          'truncate px-2 py-1 text-sm text-slate-700',
                           column.editable && !isDesignMode && 'cursor-text',
                         )}
                       >
@@ -425,7 +461,17 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
 
         {pageRows.length === 0 && (
           <div className="flex h-24 items-center justify-center px-3 text-center text-sm text-slate-400">
-            {sourceError ? <span className="text-red-600">{sourceError}</span> : configured ? 'No rows' : emptyRowHint(properties)}
+            {properties.sourceLoading ? (
+              'Loading…'
+            ) : typeof properties.queryError === 'string' && properties.queryError ? (
+              <span className="text-red-600">{properties.queryError}</span>
+            ) : sourceError ? (
+              <span className="text-red-600">{sourceError}</span>
+            ) : configured ? (
+              'No rows'
+            ) : (
+              emptyRowHint(properties)
+            )}
           </div>
         )}
       </div>
@@ -471,7 +517,7 @@ function Pager({
           : {}),
       }}
       className={clsx(
-        'flex shrink-0 items-center gap-1.5 border-t border-slate-200 px-2 py-1 text-xs text-slate-500',
+        'flex shrink-0 items-center gap-1.5 border-t border-slate-200 px-2 py-1 text-sm text-slate-500',
         align === 'left' && 'justify-start',
         align === 'center' && 'justify-center',
         align === 'right' && 'justify-end',
@@ -550,6 +596,84 @@ function PagerButton({
   );
 }
 
+function RowActionButtons({
+  actions,
+  disabled,
+  onAction,
+}: {
+  actions: TableRowAction[];
+  disabled: boolean;
+  onAction: (action: TableRowAction) => void;
+}) {
+  if (actions.length === 0) {
+    return <span className="text-sm text-slate-300">—</span>;
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-0.5">
+      {actions.map((action) => {
+        const meta = actionMeta(action.kind);
+        return (
+          <button
+            key={action.kind}
+            type="button"
+            disabled={disabled}
+            title={action.label ?? meta.label}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!disabled) onAction(action);
+            }}
+            className={clsx(
+              'rounded px-1.5 py-0.5 text-sm font-medium',
+              action.kind === 'delete'
+                ? 'text-red-600 hover:bg-red-50'
+                : action.kind === 'edit'
+                  ? 'text-blue-700 hover:bg-blue-50'
+                  : 'text-slate-700 hover:bg-slate-100',
+              disabled && 'cursor-default opacity-70',
+            )}
+          >
+            {action.label ?? meta.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function downloadFromRow(row: Record<string, unknown>, action: TableRowAction): void {
+  const raw = action.downloadKey ? row[action.downloadKey] : undefined;
+  if (raw === undefined || raw === null || raw === '') return;
+
+  const fileName =
+    (action.fileNameKey && row[action.fileNameKey] != null
+      ? String(row[action.fileNameKey])
+      : '') || 'download';
+
+  if (typeof raw === 'string' && /^(https?:|blob:|data:)/i.test(raw.trim())) {
+    const anchor = document.createElement('a');
+    anchor.href = raw.trim();
+    anchor.download = fileName;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    return;
+  }
+
+  const body = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+  const blob = new Blob([body], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function readColour(properties: Record<string, unknown>, key: string): string | undefined {
   const value = properties[key];
   return typeof value === 'string' && value !== '' ? value : undefined;
@@ -570,6 +694,9 @@ export const tableWidget: RegisteredWidget = {
       { key: 'onRowSelect', label: 'On row select', payloadKeys: ['row', 'index'] },
       { key: 'onPageChange', label: 'On page change', payloadKeys: ['pageIndex', 'pageSize', 'pageOffset'] },
       { key: 'onCellEdit', label: 'On cell edit', payloadKeys: ['rowKey', 'column', 'value', 'previous', 'row'] },
+      { key: 'onRowEdit', label: 'On row edit', payloadKeys: ['row', 'index', 'rowKey'] },
+      { key: 'onRowDelete', label: 'On row delete', payloadKeys: ['row', 'index', 'rowKey'] },
+      { key: 'onRowDownload', label: 'On row download', payloadKeys: ['row', 'index', 'rowKey'] },
     ],
     exposedState: [
       { key: 'selectedRow', type: 'object', description: 'The row the user clicked' },
@@ -580,6 +707,7 @@ export const tableWidget: RegisteredWidget = {
       { key: 'pageCount', type: 'number', description: 'How many pages there are' },
       { key: 'edits', type: 'object', description: 'Every edited cell, keyed by row' },
       { key: 'lastEdit', type: 'object', description: 'The most recent cell edit' },
+      { key: 'lastAction', type: 'object', description: 'The last Edit / Delete / Download click' },
     ],
     properties: [
       {
@@ -694,14 +822,14 @@ export const tableWidget: RegisteredWidget = {
           },
         ],
       },
-      { name: 'Header font', properties: textStyleProperties('header') },
+      { name: 'Header font', properties: textStyleProperties('header', { fontSize: 14 }) },
       {
         name: 'Header background',
         properties: [
           { key: 'headerBackground', label: 'Background', control: 'color', expectedType: 'string', bindable: false },
         ],
       },
-      { name: 'Row font', properties: textStyleProperties('row') },
+      { name: 'Row font', properties: textStyleProperties('row', { fontSize: 14 }) },
       {
         name: 'Row background',
         properties: [
@@ -745,6 +873,33 @@ export const tableWidget: RegisteredWidget = {
           { key: 'onRowSelect', label: 'On row select', control: 'action_list', expectedType: 'any', bindable: false },
           { key: 'onPageChange', label: 'On page change', control: 'action_list', expectedType: 'any', bindable: false, visibleWhen: WHEN_PAGED },
           { key: 'onCellEdit', label: 'On cell edit', control: 'action_list', expectedType: 'any', bindable: false },
+          {
+            key: 'onRowEdit',
+            label: 'On row edit',
+            control: 'action_list',
+            expectedType: 'any',
+            bindable: false,
+            helpText:
+              'Also fired after an Edit button’s own event handlers. The row is event.row.',
+          },
+          {
+            key: 'onRowDelete',
+            label: 'On row delete',
+            control: 'action_list',
+            expectedType: 'any',
+            bindable: false,
+            helpText:
+              'Also fired after a Delete button’s own event handlers. The row is event.row.',
+          },
+          {
+            key: 'onRowDownload',
+            label: 'On row download',
+            control: 'action_list',
+            expectedType: 'any',
+            bindable: false,
+            helpText:
+              'Also fired after a Download button’s own event handlers. A file column still saves immediately.',
+          },
         ],
       },
     ],

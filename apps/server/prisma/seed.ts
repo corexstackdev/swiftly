@@ -7,7 +7,6 @@ import { promisify } from 'node:util';
 // here before the client reads DATABASE_URL.
 if (!process.env.DATABASE_URL && existsSync('.env')) process.loadEnvFile('.env');
 import { SYSTEM_ROLES } from '../src/common/permissions';
-import { emptyDsl } from '../src/applications/applications.service';
 
 const scrypt = promisify(scryptCallback) as (
   password: string,
@@ -37,15 +36,34 @@ async function main(): Promise<void> {
   });
 
   // Environments: datasource credentials and publish targets are scoped to these.
+  for (const [from, to] of [
+    ['staging', 'stage'],
+    ['prod', 'production'],
+  ] as const) {
+    const existingFrom = await prisma.environment.findUnique({
+      where: { organizationId_name: { organizationId: organization.id, name: from } },
+    });
+    const existingTo = await prisma.environment.findUnique({
+      where: { organizationId_name: { organizationId: organization.id, name: to } },
+    });
+    if (existingFrom && !existingTo) {
+      await prisma.environment.update({
+        where: { id: existingFrom.id },
+        data: { name: to, isProduction: to === 'production' },
+      });
+    }
+  }
+
   const environments = await Promise.all(
     [
       { name: 'dev', isDefault: true, isProduction: false },
-      { name: 'staging', isDefault: false, isProduction: false },
-      { name: 'prod', isDefault: false, isProduction: true },
+      { name: 'test', isDefault: false, isProduction: false },
+      { name: 'stage', isDefault: false, isProduction: false },
+      { name: 'production', isDefault: false, isProduction: true },
     ].map((env) =>
       prisma.environment.upsert({
         where: { organizationId_name: { organizationId: organization.id, name: env.name } },
-        update: {},
+        update: { isDefault: env.isDefault, isProduction: env.isProduction },
         create: { ...env, organizationId: organization.id },
       }),
     ),
@@ -67,15 +85,13 @@ async function main(): Promise<void> {
     roles[name] = role.id;
   }
 
-  // Three accounts that demonstrate the separation of duties: the builder cannot
-  // publish, and the reviewer cannot edit.
+  // Three accounts: builder can publish to an environment; reviewer cannot edit.
   const accounts = [
-    { email: 'admin@acme.test', name: 'Avery Admin', role: 'Org Admin' },
-    { email: 'builder@acme.test', name: 'Blake Builder', role: 'App Builder' },
-    { email: 'reviewer@acme.test', name: 'Robin Reviewer', role: 'IT Reviewer' },
+    { email: 'admin@acme.test', name: 'Admin', role: 'Org Admin' },
+    { email: 'builder@acme.test', name: 'Builder', role: 'App Builder' },
+    { email: 'reviewer@acme.test', name: 'Reviewer', role: 'IT Reviewer' },
   ];
 
-  const users: Record<string, string> = {};
   for (const account of accounts) {
     const user = await prisma.user.upsert({
       where: { email: account.email },
@@ -86,7 +102,6 @@ async function main(): Promise<void> {
         passwordHash: await hashPassword('Password123!'),
       },
     });
-    users[account.email] = user.id;
 
     await prisma.organizationMember.upsert({
       where: { organizationId_userId: { organizationId: organization.id, userId: user.id } },
@@ -99,27 +114,11 @@ async function main(): Promise<void> {
     });
   }
 
-  const workspace = await prisma.workspace.upsert({
+  await prisma.workspace.upsert({
     where: { organizationId_slug: { organizationId: organization.id, slug: 'operations' } },
     update: {},
     create: { organizationId: organization.id, name: 'Operations', slug: 'operations' },
   });
-
-  const existingApp = await prisma.application.findUnique({
-    where: { workspaceId_slug: { workspaceId: workspace.id, slug: 'order-console' } },
-  });
-  if (!existingApp) {
-    await prisma.application.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Order Console',
-        slug: 'order-console',
-        description: 'Starter application',
-        createdById: users['builder@acme.test']!,
-        draftDsl: emptyDsl('Order Console') as unknown as object,
-      },
-    });
-  }
 
   console.log('Seed complete');
   console.log(`  Organization : ${organization.name} (${organization.slug})`);

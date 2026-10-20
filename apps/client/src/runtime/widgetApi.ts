@@ -7,6 +7,8 @@ import { attachControlGlobals, matchByClass } from './controlDocument';
  *
  * Lookups use Id / Class (`document.getElementById`, `getElementsByClassName`).
  * Assign `.value` or other properties directly; `setValue` remains as an alias.
+ * Live widget state is readable on the same object (`Table1.selectedRow`,
+ * `Form2.data`) so event JS and “Only run when” match what SQL bindings see.
  */
 const RESERVED_SCOPE_NAMES = new Set([
   'widgets',
@@ -220,9 +222,26 @@ function createWidgetApi(
   };
 
   return new Proxy(api, {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string') return Reflect.get(target, prop, receiver);
+      // Not a thenable — `await Table1` must not hang on a missing `.then`.
+      if (prop === 'then') return undefined;
+      if (Reflect.has(target, prop)) return Reflect.get(target, prop, receiver);
+      const state = input.getState(widget.name);
+      if (Object.hasOwn(state, prop)) return state[prop];
+      return undefined;
+    },
+    has(target, prop) {
+      if (Reflect.has(target, prop)) return true;
+      return typeof prop === 'string' && Object.hasOwn(input.getState(widget.name), prop);
+    },
     set(target, prop, value, receiver) {
       if (typeof prop !== 'string') return false;
       if (IDENTITY_KEYS.has(prop)) return true;
+      if (prop === 'selectedRow' || prop === 'selectedIndex') {
+        input.setState(widget.name, { [prop]: value });
+        return true;
+      }
       if (Reflect.has(target, prop)) {
         Reflect.set(target, prop, value, receiver);
         return true;

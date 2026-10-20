@@ -128,7 +128,10 @@ function ContainerWidget({ properties, renderChildren, isDesignMode }: WidgetPro
           {String(properties.title)}
         </div>
       ) : null}
-      <div className="relative min-h-0 flex-1" style={{ padding: spacingToCss(properties.padding) }}>
+      <div
+        className={clsx('relative min-h-0 flex-1', isDesignMode && 'overflow-visible')}
+        style={{ padding: spacingToCss(properties.padding) }}
+      >
         {renderChildren?.()}
       </div>
     </div>

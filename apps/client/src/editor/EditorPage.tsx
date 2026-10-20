@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import { jsObjectsOnPage, type ApplicationDsl, type PageDsl, type QueryEntity, type WidgetDefinition, type WidgetDsl } from '@swiftly/shared';
-import { api, type DatasourceSummary, type Environment, ApiError } from '@/lib/api';
+import { jsObjectsOnPage, queriesOnPage, type ApplicationDsl, type PageDsl, type QueryEntity, type WidgetDefinition, type WidgetDsl } from '@swiftly/shared';
+import {
+  api,
+  type ApplicationReleaseSummary,
+  type DatasourceSummary,
+  type Environment,
+  ApiError,
+} from '@/lib/api';
 import { useSession } from '@/lib/session';
 import { useAppRuntime } from '@/runtime/useAppRuntime';
-import { AppShell } from '@/runtime/AppShell';
-import { PageRenderer } from '@/runtime/PageRenderer';
+import { draftPreviewByIdPath, draftPreviewPath, publishedAppPath } from '@/lib/paths';
 import { ModeRail } from '@/shell/ModeRail';
 import { BottomBar } from '@/shell/BottomBar';
 import { defaultProperties, getWidgetDefinition } from '@/widgets/registry';
+import { GRID_COLUMNS } from '@/runtime/PageRenderer';
+import { isFixedModal, modalRowsFromHeightPx } from '@/widgets/layout';
 import { useDslHistory } from './useDslHistory';
 import { Canvas } from './Canvas';
 import { acceptPaletteDrag, dropParentId, takePaletteDrop } from './paletteDrag';
@@ -24,7 +31,7 @@ import {
   PanelResizeHandle,
   usePersistentPanelWidth,
 } from './PanelResizeHandle';
-import { QueryPanel, blankDefinition } from './QueryPanel';
+import { QueryPanel, blankDefinition, queryNameFromTable } from './QueryPanel';
 import { JsObjectPanel } from './JsObjectPanel';
 import {
   childListOf,
@@ -35,11 +42,26 @@ import {
   needsContainerFit,
   newWidgetId,
   removeWidget,
+  uniqueExactName,
   uniqueName,
   uniqueSlug,
   uniqueWidgetName,
 } from './widgetOps';
-import { copyJsName, nextAvailableName, takenJsNames } from './jsObjectOps';
+import { FormTableImportDialog, type FormImportRequest } from './FormTableImportDialog';
+import {
+  propertiesForFormField,
+  readFormImportSource,
+  widgetNameFromColumn,
+} from './formImport';
+import {
+  copyJsName,
+  isJsIdentifier,
+  nextAvailableName,
+  takenAppLevelNames,
+  takenJsNames,
+  takenNamesForEntity,
+} from './jsObjectOps';
+import { cloneQuery, rewriteEntityName } from './queryOps';
 import { reflowGridChildren, seedCellProperties } from './gridCells';
 
 /** Guards against a collapsed pane; not a design width. */
@@ -68,8 +90,8 @@ function revisionFromConflict(error: ApiError): number | undefined {
 /**
  * The application editor.
  *
- * Design and preview are the same component tree with `isDesignMode` flipped, so
- * there is no class of bug where the preview and the published app disagree.
+ * Preview is a public hosted URL (`/app/:workspace/:slug/preview`) — no Swiftly
+ * login — so a copied address runs the draft as the tool, not the editor.
  */
 
 export function EditorPage() {
@@ -78,9 +100,12 @@ export function EditorPage() {
   const [loaded, setLoaded] = useState<ApplicationDsl | null>(null);
   const [revision, setRevision] = useState(0);
   const [appName, setAppName] = useState('');
+  const [appSlug, setAppSlug] = useState('');
+  const [workspaceSlug, setWorkspaceSlug] = useState('');
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [environmentId, setEnvironmentId] = useState('');
   const [datasources, setDatasources] = useState<DatasourceSummary[]>([]);
+  const [releases, setReleases] = useState<ApplicationReleaseSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -95,9 +120,12 @@ export function EditorPage() {
         setLoaded(application.draftDsl);
         setRevision(application.draftRevision);
         setAppName(application.name);
+        setAppSlug(application.slug);
+        setWorkspaceSlug(application.workspace?.slug ?? '');
         setEnvironments(envs);
         setEnvironmentId(envs.find((env) => env.isDefault)?.id ?? envs[0]?.id ?? '');
         setDatasources(sources);
+        setReleases(application.releases ?? []);
       })
       .catch(
         (error) =>
@@ -118,11 +146,14 @@ export function EditorPage() {
       key={applicationId}
       applicationId={applicationId}
       appName={appName}
+      appSlug={appSlug}
+      workspaceSlug={workspaceSlug}
       initialDsl={loaded}
       initialRevision={revision}
       environments={environments}
       initialEnvironmentId={environmentId}
       datasources={datasources}
+      initialReleases={releases}
     />
   );
 }
@@ -130,19 +161,25 @@ export function EditorPage() {
 function EditorBody({
   applicationId,
   appName,
+  appSlug,
+  workspaceSlug,
   initialDsl,
   initialRevision,
   environments,
   initialEnvironmentId,
   datasources,
+  initialReleases,
 }: {
   applicationId: string;
   appName: string;
+  appSlug: string;
+  workspaceSlug: string;
   initialDsl: ApplicationDsl;
   initialRevision: number;
   environments: Environment[];
   initialEnvironmentId: string;
   datasources: DatasourceSummary[];
+  initialReleases: ApplicationReleaseSummary[];
 }) {
   const { user } = useSession();
   const history = useDslHistory(initialDsl);
@@ -159,16 +196,17 @@ function EditorBody({
   const channelRef = useRef<BroadcastChannel | null>(null);
 
   const [environmentId, setEnvironmentId] = useState(initialEnvironmentId);
+  const [releases, setReleases] = useState(initialReleases);
   const [currentPageId, setCurrentPageId] = useState(
     initialDsl.pages.find((page) => page.isDefault)?.id ?? initialDsl.pages[0]?.id ?? '',
   );
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  const [formImportId, setFormImportId] = useState<string | null>(null);
   const [selectedQueryName, setSelectedQueryName] = useState<string | null>(null);
   const [selectedJsId, setSelectedJsId] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<'query' | 'errors' | 'js' | null>(null);
   const [canvasPreset, setCanvasPreset] = useState<CanvasPresetId>('fluid');
   const [availableWidth, setAvailableWidth] = useState(960);
-  const [isPreview, setIsPreview] = useState(false);
   /** Bumped whenever the fit pass corrects a height; see the effect below. */
   const [fitVersion, setFitVersion] = useState(0);
   // Both side panels can be folded away. On a laptop they account for well over a
@@ -198,7 +236,6 @@ function EditorBody({
   const failuresRef = useRef(0);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
-  const canSubmit = user?.permissions.includes('app:submit') ?? false;
   const canPublish = user?.permissions.includes('app:publish') ?? false;
 
   const runtime = useAppRuntime({
@@ -207,25 +244,33 @@ function EditorBody({
     environmentId,
     source: 'draft',
     currentUser: user,
-    isDesignMode: !isPreview,
+    isDesignMode: true,
     initialPageId: currentPageId,
   });
 
   const page = history.dsl.pages.find((candidate) => candidate.id === currentPageId);
   const selectedWidget = page ? (findWidget(page.widgets, selectedWidgetId ?? '') ?? null) : null;
+  const formImportWidget =
+    formImportId && page ? (findWidget(page.widgets, formImportId) ?? null) : null;
   const selectedParent = page ? findParent(page.widgets, selectedWidgetId ?? '') : null;
   const selectedQuery =
-    history.dsl.queries.find((query) => query.name === selectedQueryName) ?? null;
+    queriesOnPage(history.dsl.queries, currentPageId).find(
+      (query) => query.name === selectedQueryName,
+    ) ?? null;
   const selectedJsObject =
-    (history.dsl.jsObjects ?? []).find((object) => object.id === selectedJsId) ?? null;
+    jsObjectsOnPage(history.dsl.jsObjects, currentPageId).find(
+      (object) => object.id === selectedJsId,
+    ) ?? null;
 
   const renameJsObject = (id: string, name: string) => {
+    if (!isJsIdentifier(name)) return;
     history.update((draft) => {
       const target = (draft.jsObjects ?? []).find((object) => object.id === id);
-      if (!target) return;
-      const pageId = target.pageId ?? currentPageId;
-      const taken = takenJsNames(draft, pageId, id);
-      target.name = taken.has(name) ? nextAvailableName(name, taken) : name;
+      if (!target || target.name === name) return;
+      const taken = takenNamesForEntity(draft, target.pageId, { jsId: id });
+      const next = taken.has(name) ? nextAvailableName(name, taken) : name;
+      rewriteEntityName(draft, target.name, next, { pageId: target.pageId, skipJsId: id });
+      target.name = next;
     }, 'rename-js');
   };
 
@@ -254,6 +299,16 @@ function EditorBody({
     setBottomTab('js');
   };
 
+  const makeJsGlobal = (id: string) => {
+    history.update((draft) => {
+      const target = (draft.jsObjects ?? []).find((object) => object.id === id);
+      if (!target) return;
+      const taken = takenAppLevelNames(draft, { jsId: id });
+      if (taken.has(target.name)) target.name = nextAvailableName(target.name, taken);
+      delete target.pageId;
+    }, 'js-global');
+  };
+
   const deleteJsObject = (id: string) => {
     history.update((draft) => {
       draft.jsObjects = (draft.jsObjects ?? []).filter((object) => object.id !== id);
@@ -263,6 +318,87 @@ function EditorBody({
       setBottomTab(null);
     }
   };
+
+  const renameQuery = (id: string, name: string) => {
+    if (!isJsIdentifier(name)) return;
+    history.update((draft) => {
+      const target = draft.queries.find((query) => query.id === id);
+      if (!target || target.name === name) return;
+      const taken = takenNamesForEntity(draft, target.pageId, { queryId: id });
+      const next = taken.has(name) ? nextAvailableName(name, taken) : name;
+      rewriteEntityName(draft, target.name, next, { pageId: target.pageId, skipQueryId: id });
+      target.name = next;
+      setSelectedQueryName(next);
+    }, 'rename-query');
+  };
+
+  const copyQuery = (id: string, pageId: string) => {
+    const source = history.dsl.queries.find((query) => query.id === id);
+    if (!source) return;
+    const name = copyJsName(source.name, takenJsNames(history.dsl, pageId));
+    const copyId = `q_${Math.random().toString(36).slice(2, 10)}`;
+    history.update((draft) => {
+      draft.queries.push(cloneQuery(source, { id: copyId, name, pageId }));
+    }, 'copy-query');
+  };
+
+  const moveQuery = (id: string, pageId: string) => {
+    let nextName = '';
+    history.update((draft) => {
+      const target = draft.queries.find((query) => query.id === id);
+      if (!target) return;
+      const taken = takenJsNames(draft, pageId, { queryId: id });
+      if (taken.has(target.name)) target.name = nextAvailableName(target.name, taken);
+      target.pageId = pageId;
+      nextName = target.name;
+    }, 'move-query');
+    if (!nextName) return;
+    setCurrentPageId(pageId);
+    setSelectedQueryName(nextName);
+    setBottomTab('query');
+  };
+
+  const makeQueryGlobal = (id: string) => {
+    history.update((draft) => {
+      const target = draft.queries.find((query) => query.id === id);
+      if (!target) return;
+      const taken = takenAppLevelNames(draft, { queryId: id });
+      if (taken.has(target.name)) target.name = nextAvailableName(target.name, taken);
+      delete target.pageId;
+    }, 'query-global');
+  };
+
+  const deleteQuery = (id: string) => {
+    const target = history.dsl.queries.find((query) => query.id === id);
+    history.update((draft) => {
+      draft.queries = draft.queries.filter((query) => query.id !== id);
+    }, 'delete-query');
+    if (target && selectedQueryName === target.name) {
+      setSelectedQueryName(null);
+      setBottomTab(null);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      selectedQueryName &&
+      !queriesOnPage(history.dsl.queries, currentPageId).some(
+        (query) => query.name === selectedQueryName,
+      )
+    ) {
+      setSelectedQueryName(null);
+      setBottomTab((tab) => (tab === 'query' ? null : tab));
+    }
+    if (
+      selectedJsId &&
+      !jsObjectsOnPage(history.dsl.jsObjects, currentPageId).some(
+        (object) => object.id === selectedJsId,
+      )
+    ) {
+      setSelectedJsId(null);
+      setBottomTab((tab) => (tab === 'js' ? null : tab));
+    }
+  }, [currentPageId, history.dsl.queries, history.dsl.jsObjects, selectedQueryName, selectedJsId]);
 
   const presetWidth = CANVAS_PRESETS.find((preset) => preset.id === canvasPreset)?.width ?? null;
 
@@ -312,13 +448,7 @@ function EditorBody({
     };
     // Re-measured when a panel folds away, since that changes the space available
     // without the window changing size.
-    //
-    // `isPreview` matters for a different reason: preview returns early, so the
-    // host unmounts entirely and comes back as a new element. Without it here the
-    // observer stays bound to the old, detached node and nothing ever measures
-    // the new one, which is how returning from preview left the canvas stuck at
-    // its minimum width.
-  }, [entityPanelOpen, propertyPanelOpen, isPreview]);
+  }, [entityPanelOpen, propertyPanelOpen]);
 
   /* --- persistence ------------------------------------------------ */
 
@@ -499,7 +629,6 @@ function EditorBody({
         (target instanceof HTMLElement && target.isContentEditable);
 
       if (
-        !isPreview &&
         !isEditing &&
         selectedWidgetId &&
         (event.key === 'Delete' || event.key === 'Backspace')
@@ -523,7 +652,7 @@ function EditorBody({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [deleteWidget, history, isPreview, save, selectedWidgetId]);
+  }, [deleteWidget, history, save, selectedWidgetId]);
 
   const addWidget = useCallback(
     (parentId: string | null, type: string, position: { x: number; y: number }) => {
@@ -602,6 +731,62 @@ function EditorBody({
     [updatePage],
   );
 
+  const importFormFromTable = useCallback(
+    (formId: string, request: FormImportRequest) => {
+      const specs = request.fields.map((field) => ({
+        id: newWidgetId(),
+        type: field.widgetType,
+        definition: getWidgetDefinition(field.widgetType),
+        column: field.column,
+        properties: propertiesForFormField(field.column, field.widgetType, field.choiceSource),
+      }));
+
+      updatePage((target) => {
+        const form = findWidget(target.widgets, formId);
+        if (!form || form.type !== 'form') return;
+        if (request.replaceExisting) form.children = [];
+        const children = (form.children ??= []);
+        let y = children.reduce(
+          (lowest, child) => Math.max(lowest, child.layout.y + child.layout.h),
+          0,
+        );
+        const title = String(form.properties.title ?? '');
+        form.properties = {
+          ...form.properties,
+          ...(title && title !== 'Form' ? {} : { title: request.tableTitle }),
+          importSource: {
+            datasourceId: request.datasourceId,
+            schema: request.schema,
+            table: request.table,
+          },
+        };
+        for (const spec of specs) {
+          if (!spec.definition) continue;
+          const height = spec.definition.defaultLayout.h;
+          const properties = {
+            ...defaultProperties(spec.definition),
+            ...spec.properties,
+          };
+          for (const [key, value] of Object.entries(spec.properties)) {
+            if (value == null) delete properties[key];
+          }
+          children.push({
+            id: spec.id,
+            name: uniqueExactName(widgetNameFromColumn(spec.column.name), target),
+            type: spec.type,
+            layout: { x: 0, y, w: GRID_COLUMNS, h: height },
+            properties,
+          });
+          y += height;
+        }
+      }, `import-form:${formId}`);
+
+      setFormImportId(null);
+      setSelectedWidgetId(formId);
+    },
+    [updatePage],
+  );
+
   /** Writes properties onto any widget on the page, at any depth. */
   const updateWidgetProperties = useCallback(
     (widgetId: string, patch: Record<string, unknown>) => {
@@ -651,6 +836,16 @@ function EditorBody({
                 canvasSize: entry.h >= 26 ? 3 : entry.w >= 18 ? 2 : 1,
               };
             }
+            if (widget.type === 'modal' && isFixedModal(widget.properties)) {
+              const node = document.querySelector(
+                `[data-canvas-widget="${CSS.escape(widget.id)}"]`,
+              ) as HTMLElement | null;
+              const widthPx = Math.round(node?.getBoundingClientRect().width ?? 0);
+              const heightPx = Math.round(node?.getBoundingClientRect().height ?? 0);
+              if (widthPx > 0 && heightPx > 0) {
+                widget.properties = { ...widget.properties, widthPx, heightPx };
+              }
+            }
           }
         }
       }, `layout:${parentId ?? 'root'}`);
@@ -672,12 +867,15 @@ function EditorBody({
   );
 
   const createQuery = useCallback(
-    (datasourceId: string) => {
+    (datasourceId: string, seed?: { schema?: string; table: string }) => {
       const datasource = datasources.find((candidate) => candidate.id === datasourceId);
-      const mode = datasource?.pluginId === 'rest' ? 'api' : 'raw_sql';
+      const mode = seed ? 'builder' : datasource?.pluginId === 'rest' ? 'api' : 'raw_sql';
 
       const id = `q_${Math.random().toString(36).slice(2, 10)}`;
-      const name = uniqueName('Query', history.dsl.queries);
+      const name = nextAvailableName(
+        seed ? queryNameFromTable(seed.table) : 'Query',
+        takenAppLevelNames(history.dsl),
+      );
 
       history.update((draft) => {
         draft.queries.push({
@@ -685,9 +883,17 @@ function EditorBody({
           name,
           datasourceId,
           mode,
-          definition: blankDefinition(mode),
+          definition: seed
+            ? {
+                kind: 'builder',
+                operation: 'select',
+                schema: seed.schema,
+                table: seed.table,
+                limit: '50',
+              }
+            : blankDefinition(mode),
           settings: { timeoutMs: 30_000, maxRows: 10_000 },
-          runOnPageLoad: false,
+          runOnPageLoad: Boolean(seed),
           confirmBeforeRun: false,
         });
       }, 'add-query');
@@ -698,34 +904,21 @@ function EditorBody({
     [history, datasources],
   );
 
-  /* --- preview ----------------------------------------------------- */
-
-  if (isPreview) {
-    return (
-      <div className="flex h-screen flex-col">
-        <div className="flex shrink-0 items-center gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2">
-          <span className="text-sm font-medium text-amber-900">Preview</span>
-          <span className="text-xs text-amber-700">
-            Running the draft against{' '}
-            <strong>{environments.find((e) => e.id === environmentId)?.name}</strong> — queries,
-            navigation and validation all behave as they will once published.
-          </span>
-          <button
-            type="button"
-            onClick={() => setIsPreview(false)}
-            className="ml-auto rounded border border-amber-400 bg-white px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
-          >
-            Back to editing
-          </button>
-        </div>
-        <div className="min-h-0 flex-1">
-          <AppShell navigation={history.dsl.navigation} runtime={runtime}>
-            {runtime.page && <PageRenderer widgets={runtime.page.widgets} runtime={runtime} />}
-          </AppShell>
-        </div>
-      </div>
-    );
-  }
+  const [searchParams, setSearchParams] = useSearchParams();
+  const seededFromUrl = useRef(false);
+  useEffect(() => {
+    if (seededFromUrl.current) return;
+    const datasourceId = searchParams.get('datasourceId');
+    const table = searchParams.get('table');
+    if (!datasourceId || !table) return;
+    if (!datasources.some((datasource) => datasource.id === datasourceId)) return;
+    seededFromUrl.current = true;
+    createQuery(datasourceId, {
+      schema: searchParams.get('schema') || undefined,
+      table,
+    });
+    setSearchParams({}, { replace: true });
+  }, [createQuery, datasources, searchParams, setSearchParams]);
 
   /* --- editor ------------------------------------------------------ */
 
@@ -791,6 +984,10 @@ function EditorBody({
                 if (!draft.pages.some((candidate) => candidate.isDefault) && draft.pages[0]) {
                   draft.pages[0].isDefault = true;
                 }
+                draft.queries = draft.queries.filter((query) => query.pageId !== pageId);
+                draft.jsObjects = (draft.jsObjects ?? []).filter(
+                  (object) => object.pageId !== pageId,
+                );
               }, 'delete-page');
 
               if (currentPageId === pageId) setCurrentPageId(remaining[0]?.id ?? '');
@@ -849,19 +1046,42 @@ function EditorBody({
 
             <button
               type="button"
-              onClick={() => setIsPreview(true)}
+              onClick={() => {
+                const path =
+                  workspaceSlug && appSlug
+                    ? draftPreviewPath(workspaceSlug, appSlug)
+                    : draftPreviewByIdPath(applicationId);
+                const href = environmentId
+                  ? `${path}?environmentId=${encodeURIComponent(environmentId)}`
+                  : path;
+                const url = `${window.location.origin}${href}`;
+                const tab = window.open(url, '_blank');
+                const shouldReload = history.isDirty;
+                void (async () => {
+                  if (!shouldReload) return;
+                  await save();
+                  tab?.location.reload();
+                })();
+              }}
               className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
             >
               Preview
             </button>
-            {canSubmit && <SubmitButton applicationId={applicationId} onBeforeSubmit={save} />}
+            {workspaceSlug && appSlug && releases.length > 0 && (
+              <PublishedEnvLinks
+                workspaceSlug={workspaceSlug}
+                appSlug={appSlug}
+                releases={releases}
+              />
+            )}
             {canPublish && (
-              <Link
-                to="/reviews"
-                className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Reviews
-              </Link>
+              <PublishButton
+                applicationId={applicationId}
+                environments={environments}
+                currentEnvironmentId={environmentId}
+                onBeforePublish={save}
+                onPublished={(next) => setReleases(next)}
+              />
             )}
           </div>
         </header>
@@ -938,21 +1158,18 @@ function EditorBody({
                 setBottomTab(name ? 'query' : null);
               }}
               onCreateQuery={createQuery}
-              onDeleteQuery={(name) =>
-                history.update((draft) => {
-                  draft.queries = draft.queries.filter((query) => query.name !== name);
-                  if (selectedQueryName === name) {
-                    setSelectedQueryName(null);
-                    setBottomTab(null);
-                  }
-                }, 'delete-query')
-              }
-              onCreateJsObject={() => {
+              onRenameQuery={renameQuery}
+              onCopyQuery={copyQuery}
+              onMoveQuery={moveQuery}
+              onMakeQueryGlobal={makeQueryGlobal}
+              onDeleteQuery={deleteQuery}
+              onCreateJsObject={(scope) => {
                 if (!currentPageId) return;
                 const id = `js_${Math.random().toString(36).slice(2, 8)}`;
-                const name = uniqueName(
+                const pageId = scope === 'app' ? undefined : currentPageId;
+                const name = nextAvailableName(
                   'Utils',
-                  jsObjectsOnPage(history.dsl.jsObjects, currentPageId),
+                  takenNamesForEntity(history.dsl, pageId),
                 );
 
                 history.update((draft) => {
@@ -960,7 +1177,7 @@ function EditorBody({
                   draft.jsObjects.push({
                     id,
                     name,
-                    pageId: currentPageId,
+                    ...(pageId ? { pageId } : {}),
                     code: `module.exports = {
   format(value) {
     return String(value);
@@ -987,6 +1204,7 @@ function EditorBody({
               onRenameJsObject={renameJsObject}
               onCopyJsObject={copyJsObject}
               onMoveJsObject={moveJsObject}
+              onMakeJsGlobal={makeJsGlobal}
               onDeleteJsObject={deleteJsObject}
             />
           </aside>
@@ -1051,6 +1269,7 @@ function EditorBody({
                       onDropIntoContainer: addWidgetToContainer,
                       onUpdateProperties: updateWidgetProperties,
                       onDelete: deleteWidget,
+                      onImportFormFromTable: setFormImportId,
                     }}
                   />
                 )}
@@ -1062,6 +1281,9 @@ function EditorBody({
                 {bottomTab === 'query' ? (
                   <QueryPanel
                     query={selectedQuery}
+                    dsl={history.dsl}
+                    pages={history.dsl.pages}
+                    currentPageId={currentPageId}
                     applicationId={applicationId}
                     environmentId={environmentId}
                     datasources={datasources}
@@ -1069,7 +1291,28 @@ function EditorBody({
                     onChange={(mutate) =>
                       selectedQueryName && changeQuery(selectedQueryName, mutate)
                     }
+                    onExecuted={(result) => {
+                      if (selectedQueryName) runtime.ingestQueryResult(selectedQueryName, result);
+                    }}
                     onClose={() => setBottomTab(null)}
+                    onRename={(name) => {
+                      if (selectedQuery) renameQuery(selectedQuery.id, name);
+                    }}
+                    onCopyToPage={(pageId) => {
+                      if (selectedQuery) copyQuery(selectedQuery.id, pageId);
+                    }}
+                    onMoveToPage={(pageId) => {
+                      if (selectedQuery) moveQuery(selectedQuery.id, pageId);
+                    }}
+                    onMakeGlobal={() => {
+                      if (selectedQuery) makeQueryGlobal(selectedQuery.id);
+                    }}
+                    onCopyToThisPage={() => {
+                      if (selectedQuery) copyQuery(selectedQuery.id, currentPageId);
+                    }}
+                    onDelete={() => {
+                      if (selectedQuery) deleteQuery(selectedQuery.id);
+                    }}
                   />
                 ) : bottomTab === 'js' ? (
                   <JsObjectPanel
@@ -1098,6 +1341,12 @@ function EditorBody({
                     }}
                     onMoveToPage={(pageId) => {
                       if (selectedJsId) moveJsObject(selectedJsId, pageId);
+                    }}
+                    onMakeGlobal={() => {
+                      if (selectedJsId) makeJsGlobal(selectedJsId);
+                    }}
+                    onCopyToThisPage={() => {
+                      if (selectedJsId) copyJsObject(selectedJsId, currentPageId);
                     }}
                   />
                 ) : (
@@ -1144,7 +1393,8 @@ function EditorBody({
                 dsl={history.dsl}
                 pageId={currentPageId}
                 evaluated={runtime.evaluated}
-                onChange={(key, value) =>
+                resolvedProperties={runtime.properties(selectedWidget.name)}
+                onChange={(key, value) => {
                   updatePage((target) => {
                     const widget = findWidget(target.widgets, selectedWidgetId ?? '');
                     if (!widget) return;
@@ -1157,8 +1407,46 @@ function EditorBody({
                     if (widget.type === 'grid' && key === 'columns') {
                       reflowGridChildren(widget, Number(value));
                     }
-                  }, `property:${key}`)
-                }
+                    if (widget.type === 'modal' && key === 'size' && value === 'fixed') {
+                      const node = document.querySelector(
+                        `[data-canvas-widget="${CSS.escape(widget.id)}"]`,
+                      ) as HTMLElement | null;
+                      const measuredW = Math.round(node?.getBoundingClientRect().width ?? 0);
+                      const measuredH = Math.round(node?.getBoundingClientRect().height ?? 0);
+                      widget.properties = {
+                        ...widget.properties,
+                        size: 'fixed',
+                        widthPx: measuredW > 0 ? measuredW : 560,
+                        heightPx: measuredH > 0 ? measuredH : 420,
+                      };
+                    }
+                    if (widget.type === 'modal' && key === 'heightPx') {
+                      const px = Number(value);
+                      if (Number.isFinite(px) && px > 0) {
+                        widget.layout = { ...widget.layout, h: modalRowsFromHeightPx(px) };
+                      }
+                    }
+                    if (widget.type === 'modal' && key === 'widthPx') {
+                      const px = Number(value);
+                      const node = document.querySelector(
+                        `[data-canvas-widget="${CSS.escape(widget.id)}"]`,
+                      ) as HTMLElement | null;
+                      const currentW = node?.getBoundingClientRect().width ?? 0;
+                      if (Number.isFinite(px) && px >= 240 && currentW > 0 && widget.layout.w > 0) {
+                        widget.layout = {
+                          ...widget.layout,
+                          w: Math.max(4, Math.min(24, Math.round((px / currentW) * widget.layout.w))),
+                        };
+                      }
+                    }
+                  }, `property:${key}`);
+                  if (
+                    selectedWidget.type === 'modal' &&
+                    (key === 'heightPx' || key === 'widthPx' || key === 'size')
+                  ) {
+                    setFitVersion((version) => version + 1);
+                  }
+                }}
                 onLayout={(patch) => {
                   updatePage((target) => {
                     const widget = findWidget(target.widgets, selectedWidgetId ?? '');
@@ -1183,6 +1471,11 @@ function EditorBody({
                   }, 'rename')
                 }
                 onDelete={() => selectedWidgetId && deleteWidget(selectedWidgetId)}
+                onImportFromTable={
+                  selectedWidget.type === 'form'
+                    ? () => setFormImportId(selectedWidget.id)
+                    : undefined
+                }
               />
             ) : (
               <PagePropertiesPanel
@@ -1214,6 +1507,20 @@ function EditorBody({
           }
         />
       </div>
+
+      {formImportWidget?.type === 'form' && (
+        <FormTableImportDialog
+          formName={formImportWidget.name}
+          hasExistingFields={(formImportWidget.children ?? []).length > 0}
+          datasources={datasources}
+          environmentId={environmentId}
+          dsl={history.dsl}
+          pageId={currentPageId}
+          initialSource={readFormImportSource(formImportWidget.properties)}
+          onClose={() => setFormImportId(null)}
+          onImport={(request) => importFormFromTable(formImportWidget.id, request)}
+        />
+      )}
     </div>
   );
 }
@@ -1222,44 +1529,198 @@ function EditorBody({
  * Chrome
  * ------------------------------------------------------------------ */
 
-function SubmitButton({
+function PublishedEnvLinks({
+  workspaceSlug,
+  appSlug,
+  releases,
+}: {
+  workspaceSlug: string;
+  appSlug: string;
+  releases: ApplicationReleaseSummary[];
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[11px] text-slate-400">Published</span>
+      {releases.map((release) => (
+        <a
+          key={release.environmentId}
+          href={publishedAppPath(workspaceSlug, appSlug, release.environmentName)}
+          target="_blank"
+          rel="noreferrer"
+          title={`v${release.versionNumber} · ${release.environmentName}`}
+          className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+        >
+          {release.environmentName}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+const ENV_ORDER: Record<string, number> = {
+  dev: 0,
+  test: 1,
+  stage: 2,
+  staging: 2,
+  production: 3,
+  prod: 3,
+};
+
+function sortEnvironments(environments: Environment[]): Environment[] {
+  return [...environments].sort(
+    (left, right) =>
+      (ENV_ORDER[left.name] ?? 50) - (ENV_ORDER[right.name] ?? 50) ||
+      left.name.localeCompare(right.name),
+  );
+}
+
+function PublishButton({
   applicationId,
-  onBeforeSubmit,
+  environments,
+  currentEnvironmentId,
+  onBeforePublish,
+  onPublished,
 }: {
   applicationId: string;
-  onBeforeSubmit: () => Promise<void>;
+  environments: Environment[];
+  currentEnvironmentId: string;
+  onBeforePublish: () => Promise<void>;
+  onPublished: (releases: ApplicationReleaseSummary[]) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(() =>
+    currentEnvironmentId ? new Set([currentEnvironmentId]) : new Set(),
+  );
+  const containerRef = useRef<HTMLDivElement>(null);
+  const ordered = sortEnvironments(environments);
 
-  const submit = async (): Promise<void> => {
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent): void => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const toggle = (id: string): void => {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const publish = async (): Promise<void> => {
+    if (selected.size === 0) return;
     setBusy(true);
     setResult(null);
     try {
-      await onBeforeSubmit();
-      const note = window.prompt('What changed in this version?') ?? undefined;
-      const version = await api.publish.submit(applicationId, note);
-      setResult(`Version ${version.versionNumber} submitted for review`);
+      await onBeforePublish();
+      const version = await api.publish.publish(applicationId, [...selected]);
+      const names = ordered
+        .filter((environment) => selected.has(environment.id))
+        .map((environment) => environment.name)
+        .join(', ');
+      setResult(`Published v${version.versionNumber} to ${names}`);
+      onPublished(version.releases ?? []);
+      setOpen(false);
     } catch (error) {
       setResult(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
-      setTimeout(() => setResult(null), 6000);
+      setTimeout(() => setResult(null), 8000);
     }
   };
 
   return (
-    <>
+    <div ref={containerRef} className="relative flex items-center gap-2">
       {result && <span className="max-w-xs truncate text-xs text-slate-600">{result}</span>}
       <button
         type="button"
-        onClick={submit}
-        disabled={busy}
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setSelected(currentEnvironmentId ? new Set([currentEnvironmentId]) : new Set());
+          setOpen(true);
+        }}
+        disabled={busy || ordered.length === 0}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {busy ? 'Submitting…' : 'Submit for review'}
+        {busy ? 'Publishing…' : 'Publish'}
       </button>
-    </>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Choose environments to publish"
+          className="absolute top-full right-0 z-50 mt-1 w-56 rounded-md border border-slate-200 bg-white py-2 shadow-lg"
+        >
+          <p className="px-3 pb-1.5 text-[11px] font-medium text-slate-500">
+            Publish this version to
+          </p>
+          <ul className="px-1">
+            {ordered.map((environment) => (
+              <li key={environment.id}>
+                <label
+                  className={clsx(
+                    'flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-slate-50',
+                    environment.isProduction ? 'text-amber-900' : 'text-slate-700',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(environment.id)}
+                    onChange={() => toggle(environment.id)}
+                    className="rounded border-slate-300"
+                  />
+                  {environment.name}
+                  {environment.isProduction && (
+                    <span className="ml-auto text-[10px] font-medium text-amber-600">prod</span>
+                  )}
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-100 px-3 pt-2">
+            <button
+              type="button"
+              onClick={() =>
+                setSelected(
+                  selected.size === ordered.length
+                    ? new Set()
+                    : new Set(ordered.map((environment) => environment.id)),
+                )
+              }
+              className="text-[11px] text-slate-500 hover:text-slate-800"
+            >
+              {selected.size === ordered.length ? 'Clear' : 'Select all'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void publish()}
+              disabled={busy || selected.size === 0}
+              className="rounded bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              Publish{selected.size > 0 ? ` (${selected.size})` : ''}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

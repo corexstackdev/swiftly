@@ -1,4 +1,5 @@
 import type { ApplicationDsl, JsObjectDsl, PageDsl } from '@swiftly/shared';
+import { inspectJsObject } from '@/evaluation/jsObjects';
 import { control } from './controls';
 import { JsObjectMenuButton } from './JsObjectMenu';
 
@@ -21,6 +22,8 @@ export function JsObjectPanel({
   onRename,
   onCopyToPage,
   onMoveToPage,
+  onMakeGlobal,
+  onCopyToThisPage,
 }: {
   jsObject: JsObjectDsl | null;
   dsl: ApplicationDsl;
@@ -32,6 +35,8 @@ export function JsObjectPanel({
   onRename: (name: string) => void;
   onCopyToPage: (pageId: string) => void;
   onMoveToPage: (pageId: string) => void;
+  onMakeGlobal: () => void;
+  onCopyToThisPage: () => void;
 }) {
   if (!jsObject) {
     return (
@@ -40,6 +45,8 @@ export function JsObjectPanel({
       </div>
     );
   }
+
+  const compileError = inspectJsObject(jsObject.name, jsObject.code).error;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -63,10 +70,13 @@ export function JsObjectPanel({
           onRename={onRename}
           onCopyToPage={onCopyToPage}
           onMoveToPage={onMoveToPage}
+          onMakeGlobal={onMakeGlobal}
+          onCopyToThisPage={onCopyToThisPage}
           onDelete={onDelete}
         />
         <span className="text-[11px] text-slate-400">
-          Call as <code className="text-slate-500">{`{{ ${jsObject.name}.format(x) }}`}</code>
+          {jsObject.pageId ? 'This page' : 'Global'} · Call as{' '}
+          <code className="text-slate-500">{`{{ ${jsObject.name}.format(x) }}`}</code>
           . Find controls with <code className="text-slate-500">document.byId(id)</code>
           {' '}or <code className="text-slate-500">document.byClass(class)</code>, then set{' '}
           <code className="text-slate-500">.value</code>
@@ -86,6 +96,11 @@ export function JsObjectPanel({
           Close
         </button>
       </div>
+      {compileError && (
+        <p className="shrink-0 border-b border-red-100 bg-red-50 px-3 py-1.5 text-xs text-red-700">
+          {compileError} — exported functions will not appear in dropdowns until this compiles.
+        </p>
+      )}
       <textarea
         value={jsObject.code}
         onChange={(event) => onChange((target) => {

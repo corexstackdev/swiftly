@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   jsObjectsOnPage,
+  queriesOnPage,
   type ActionDsl,
   type ApplicationDsl,
   type EvaluationMap,
   type PageDsl,
+  type QueryEntity,
+  type QueryResult,
+  type SetWidgetMethod,
   type WidgetDsl,
 } from '@swiftly/shared';
 import { api } from '@/lib/api';
 import { useEvaluation } from '@/evaluation/useEvaluation';
 import {
+  applyQuerySource,
+  boundQueryNames,
   buildDataTree,
   collectQueryExpressions,
   emptyQueryState,
@@ -17,7 +23,7 @@ import {
   toQueryState,
   type QueryRuntimeState,
 } from '@/evaluation/dataTree';
-import { evaluateExpression, writePath } from '@/evaluation/evaluateSync';
+import { evaluateExpression, isActionEnabled, resolveValue, writePath } from '@/evaluation/evaluateSync';
 import { hydrateJsObjects } from '@/evaluation/jsObjects';
 import {
   attachJsObjects,
@@ -26,7 +32,7 @@ import {
   runJsSource,
   splitJsFunctionPath,
 } from '@/evaluation/runEventJs';
-import { buildWidgetScope } from './widgetApi';
+import { buildWidgetScope, type WidgetRuntimeApi } from './widgetApi';
 import type { SessionUser } from '@/lib/api';
 
 /** Click/submit in the editor selects the widget; those must not run app actions. */
@@ -51,9 +57,16 @@ export interface AppRuntime {
   properties: (widgetName: string) => Record<string, unknown>;
   widgetState: Record<string, Record<string, unknown>>;
   setWidgetState: (widgetName: string, patch: Record<string, unknown>) => void;
-  fireEvent: (widgetName: string, event: string, payload?: Record<string, unknown>) => void;
+  fireEvent: (
+    widgetName: string,
+    event: string,
+    payload?: Record<string, unknown>,
+    extraActions?: ActionDsl[],
+  ) => void;
   queryState: Record<string, QueryRuntimeState>;
   runQuery: (queryName: string) => Promise<void>;
+  /** Applies a result from the query editor's Run button onto the canvas. */
+  ingestQueryResult: (queryName: string, result: QueryResult) => void;
   /** Evaluated values for a query's own bindings, keyed by expression text. */
   queryBindings: (queryName: string) => Record<string, unknown>;
   notifications: Notification[];
@@ -77,12 +90,24 @@ export interface RuntimeOptions {
   source: 'draft' | 'published';
   currentUser: SessionUser | null;
   isDesignMode: boolean;
+  /** Used to run published queries on the public runtime route (no Swiftly login). */
+  workspaceSlug?: string;
+  appSlug?: string;
   initialPageId?: string;
   pageParams?: Record<string, string>;
 }
 
 export function useAppRuntime(options: RuntimeOptions): AppRuntime {
-  const { dsl, applicationId, environmentId, source, currentUser, isDesignMode } = options;
+  const {
+    dsl,
+    applicationId,
+    environmentId,
+    source,
+    currentUser,
+    isDesignMode,
+    workspaceSlug,
+    appSlug,
+  } = options;
 
   const defaultPageId =
     options.initialPageId ?? dsl.pages.find((page) => page.isDefault)?.id ?? dsl.pages[0]?.id ?? '';
@@ -112,7 +137,8 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
 
   const { state: evaluation, evaluate } = useEvaluation();
   const notificationId = useRef(0);
-  const loadedPages = useRef(new Set<string>());
+  /** Page+query keys already kicked off, so a remount of this effect does not double-fetch. */
+  const autoStartedQueries = useRef(new Set<string>());
 
   /**
    * `widgetStateRef` is written synchronously by `setWidgetState`, not on render.
@@ -170,9 +196,10 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
       if (!widget) return {};
       const resolved = resolveProperties(widget, evaluation.evaluated);
       const extra = propertyOverrides[widgetName];
-      return extra ? { ...resolved, ...extra } : resolved;
+      const merged = extra ? { ...resolved, ...extra } : resolved;
+      return applyQuerySource(merged, queryState);
     },
-    [page, evaluation.evaluated, propertyOverrides],
+    [page, evaluation.evaluated, propertyOverrides, queryState],
   );
 
   /* --- queries ----------------------------------------------------- */
@@ -187,33 +214,42 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
    * tick, so the worker's result is one step behind and would send the previous
    * value — a wrong query with no error to show for it.
    */
+  /**
+   * The same tree SQL bindings evaluate against: widget state (`Table1.selectedRow`),
+   * query results, appState. Event “Only run when” must use this rather than the
+   * widget control API, which has `setValue` but not `selectedRow`.
+   */
+  const liveExpressionScope = useCallback((): Record<string, unknown> => {
+    const currentPage = pageRef.current;
+    if (!currentPage) return {};
+    const { dataTree: rawTree } = buildDataTree({
+      dsl,
+      page: currentPage,
+      queryState: queryStateRef.current,
+      widgetState: widgetStateRef.current,
+      pageParams,
+      pageQuery: {},
+      currentUser: currentUser
+        ? { id: currentUser.id, name: currentUser.name, email: currentUser.email }
+        : null,
+    });
+    const scope = hydrateJsObjects(rawTree);
+    for (const [path, result] of Object.entries(evaluatedRef.current)) {
+      if (!path.startsWith('__query.')) writePath(scope, path, result.value);
+    }
+    return scope;
+  }, [dsl, pageParams, currentUser]);
+
   const queryBindings = useCallback(
     (queryName: string): Record<string, unknown> => {
-      const query = dsl.queries.find((candidate) => candidate.name === queryName);
-      if (!query) return {};
-
       const currentPage = pageRef.current;
       if (!currentPage) return {};
+      const query = queriesOnPage(dsl.queries, currentPage.id).find(
+        (candidate) => candidate.name === queryName,
+      );
+      if (!query) return {};
 
-      const { dataTree: rawTree } = buildDataTree({
-        dsl,
-        page: currentPage,
-        queryState: queryStateRef.current,
-        widgetState: widgetStateRef.current,
-        pageParams,
-        pageQuery: {},
-        currentUser: currentUser
-          ? { id: currentUser.id, name: currentUser.name, email: currentUser.email }
-          : null,
-      });
-      const scope = hydrateJsObjects(rawTree);
-
-      // Overlay the worker's evaluated bindings so an expression reading another
-      // widget's *computed* property still resolves.
-      for (const [path, result] of Object.entries(evaluatedRef.current)) {
-        if (!path.startsWith('__query.')) writePath(scope, path, result.value);
-      }
-
+      const scope = liveExpressionScope();
       const values: Record<string, unknown> = {};
       for (const expression of collectQueryExpressions(query)) {
         const outcome = evaluateExpression(expression, scope);
@@ -234,12 +270,14 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
 
       return values;
     },
-    [dsl, pageParams, currentUser],
+    [liveExpressionScope],
   );
 
   const runQuery = useCallback(
     async (queryName: string): Promise<void> => {
-      const query = dsl.queries.find((candidate) => candidate.name === queryName);
+      const query = queriesOnPage(dsl.queries, pageRef.current?.id ?? '').find(
+        (candidate) => candidate.name === queryName,
+      );
       if (!query) return;
 
       const token = (queryToken.current[queryName] = (queryToken.current[queryName] ?? 0) + 1);
@@ -251,11 +289,25 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
       }));
 
       try {
-        const result = await api.queries.execute(applicationId, queryName, {
-          source,
-          environmentId,
-          bindings: queryBindings(queryName),
-        });
+        const result =
+          !isDesignMode && workspaceSlug && appSlug
+            ? source === 'published'
+              ? await api.runtime.executeQuery(workspaceSlug, appSlug, queryName, {
+                  pageId: pageRef.current?.id,
+                  environmentId,
+                  bindings: queryBindings(queryName),
+                })
+              : await api.runtime.executePreviewQuery(workspaceSlug, appSlug, queryName, {
+                  pageId: pageRef.current?.id,
+                  environmentId,
+                  bindings: queryBindings(queryName),
+                })
+            : await api.queries.execute(applicationId, queryName, {
+                source,
+                environmentId,
+                pageId: pageRef.current?.id,
+                bindings: queryBindings(queryName),
+              });
         // A filter changed twice in quick succession sends two requests; without this
         // the slower first one lands last and the table shows the wrong rows.
         if (isStale()) return;
@@ -274,19 +326,53 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
         notify(message, 'error');
       }
     },
-    [dsl.queries, applicationId, environmentId, source, queryBindings],
+    [
+      dsl.queries,
+      applicationId,
+      environmentId,
+      source,
+      isDesignMode,
+      workspaceSlug,
+      appSlug,
+      queryBindings,
+    ],
   );
 
-  // Page-load queries run once per page visit, not on every re-render.
-  useEffect(() => {
-    if (isDesignMode || !page) return;
-    if (loadedPages.current.has(page.id)) return;
-    loadedPages.current.add(page.id);
+  const ingestQueryResult = useCallback((queryName: string, result: QueryResult): void => {
+    setQueryState((previous) => ({
+      ...previous,
+      [queryName]: toQueryState(result),
+    }));
+  }, []);
 
-    for (const query of dsl.queries) {
-      if (query.runOnPageLoad) void runQuery(query.name);
+  /*
+   * Fetch queries this page needs: those marked run-on-page-load, and those a
+   * widget is mapped to. Mapping a table to a query is itself the instruction
+   * to load rows — waiting for a separate Run click left every bound table empty.
+   */
+  const mappedQueryNames = useMemo(
+    () => (page ? boundQueryNames(page.widgets) : []),
+    [page],
+  );
+
+  useEffect(() => {
+    if (!page) return;
+    const visible = queriesOnPage(dsl.queries, page.id);
+    const wanted = new Set<string>(mappedQueryNames);
+    for (const query of visible) {
+      if (query.runOnPageLoad) wanted.add(query.name);
     }
-  }, [page, dsl.queries, isDesignMode, runQuery]);
+
+    for (const name of wanted) {
+      const key = `${page.id}:${name}`;
+      if (autoStartedQueries.current.has(key)) continue;
+      const query = visible.find((candidate) => candidate.name === name);
+      if (!query || !isRunnableQuery(query)) continue;
+      if (query.confirmBeforeRun) continue;
+      autoStartedQueries.current.add(key);
+      void runQuery(name);
+    }
+  }, [page, mappedQueryNames, dsl.queries, runQuery]);
 
   /* --- actions ----------------------------------------------------- */
 
@@ -330,7 +416,7 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
       setOverride,
     });
 
-    for (const query of dsl.queries) {
+    for (const query of queriesOnPage(dsl.queries, currentPage?.id ?? '')) {
       if (scope[query.name] === undefined) {
         scope[query.name] = queryStateRef.current[query.name] ?? emptyQueryState();
       }
@@ -348,8 +434,12 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
   const runActions = useCallback(
     async (actions: ActionDsl[], payload?: Record<string, unknown>): Promise<void> => {
       for (const action of actions) {
+        const bindingScope = actionBindingScope(liveExpressionScope, payload);
+        if (!isActionEnabled(action.enabledWhen, bindingScope)) continue;
+
         switch (action.type) {
           case 'runQuery':
+            if (!action.queryName) break;
             try {
               await runQuery(action.queryName);
               if (action.onSuccess) await runActions(action.onSuccess, payload);
@@ -360,12 +450,17 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
 
           case 'navigate':
             if (action.to.kind === 'page') {
+              if (!action.to.pageId) break;
               setCurrentPageId(action.to.pageId);
               setPageParams(action.to.params ?? {});
-            } else if (action.newTab) {
-              window.open(action.to.href, '_blank', 'noopener,noreferrer');
             } else {
-              window.location.href = action.to.href;
+              const href = String(resolveValue(action.to.href, bindingScope) ?? '');
+              if (!href) break;
+              if (action.newTab) {
+                window.open(href, '_blank', 'noopener,noreferrer');
+              } else {
+                window.location.href = href;
+              }
             }
             break;
 
@@ -374,21 +469,27 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
             break;
 
           case 'showNotification':
-            notify(action.message, action.variant);
+            notify(String(resolveValue(action.message, bindingScope) ?? ''), action.variant);
             break;
 
-          case 'openModal':
-            setOpenModals((previous) => [...new Set([...previous, action.widgetName])]);
+          case 'openModal': {
+            const name = String(resolveValue(action.widgetName, bindingScope) ?? '');
+            if (name) setOpenModals((previous) => [...new Set([...previous, name])]);
             break;
+          }
 
-          case 'closeModal':
-            setOpenModals((previous) => previous.filter((name) => name !== action.widgetName));
+          case 'closeModal': {
+            const name = String(resolveValue(action.widgetName, bindingScope) ?? '');
+            if (name) {
+              setOpenModals((previous) => previous.filter((entry) => entry !== name));
+            }
             break;
+          }
 
           case 'setState':
             // App state is part of the DSL object; mutating it here keeps the
             // binding scope consistent without a second state container.
-            dsl.appState[action.key] = action.value;
+            if (action.key) dsl.appState[action.key] = resolveValue(action.value, bindingScope);
             break;
 
           case 'runJs':
@@ -412,17 +513,32 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
               break;
             }
             try {
-              const scope = eventScope();
-              const fromScope = scope[split.objectName];
+              const liveScope = eventScope();
+              const fromScope = liveScope[split.objectName];
               const live =
                 fromScope &&
                 typeof fromScope === 'object' &&
                 typeof (fromScope as Record<string, unknown>)[split.functionName] === 'function';
-              await Promise.resolve(
+              const result = await Promise.resolve(
                 live
-                  ? callJsFunction(scope, split.objectName, split.functionName, payload ?? {})
-                  : runJsFunction(source.code, split.functionName, scope, payload ?? {}),
+                  ? callJsFunction(liveScope, split.objectName, split.functionName, payload ?? {})
+                  : runJsFunction(source.code, split.functionName, liveScope, payload ?? {}),
               );
+              if (payload && result !== undefined) payload.result = result;
+              const targetName = String(resolveValue(action.widgetName, bindingScope) ?? '').trim();
+              if (targetName && result !== undefined) {
+                const api = asWidgetApi(eventScope()[targetName]);
+                if (!api) {
+                  notify(`Unknown component “${targetName}”`, 'error');
+                  break;
+                }
+                applyWidgetMethod(
+                  api,
+                  action.method ?? (Array.isArray(result) ? 'setOptions' : 'setValue'),
+                  result,
+                  action.property,
+                );
+              }
             } catch (error) {
               notify(error instanceof Error ? error.message : String(error), 'error');
             }
@@ -430,23 +546,46 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
           }
 
           case 'download': {
-            const blob = new Blob([String(action.data)], { type: action.mimeType });
-            const url = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = action.fileName;
-            anchor.click();
-            URL.revokeObjectURL(url);
+            const data = resolveValue(action.data, bindingScope);
+            const fileName = String(resolveValue(action.fileName, bindingScope) ?? 'download');
+            triggerDownload(data, fileName, action.mimeType);
+            break;
+          }
+
+          case 'copyToClipboard': {
+            const text = String(resolveValue(action.value, bindingScope) ?? '');
+            try {
+              await copyText(text);
+            } catch (error) {
+              notify(error instanceof Error ? error.message : String(error), 'error');
+            }
+            break;
+          }
+
+          case 'setWidget': {
+            const name = String(resolveValue(action.widgetName, bindingScope) ?? '');
+            const api = asWidgetApi(eventScope()[name]);
+            if (!name || !api) {
+              notify(`Unknown component “${name || action.widgetName}”`, 'error');
+              break;
+            }
+            const value = resolveValue(action.value, bindingScope);
+            applyWidgetMethod(api, action.method, value, action.property);
             break;
           }
         }
       }
     },
-    [runQuery, notify, dsl.appState, dsl.jsObjects, eventScope],
+    [runQuery, notify, dsl.appState, dsl.jsObjects, eventScope, liveExpressionScope],
   );
 
   const fireEvent = useCallback(
-    (widgetName: string, event: string, payload?: Record<string, unknown>): void => {
+    (
+      widgetName: string,
+      event: string,
+      payload?: Record<string, unknown>,
+      extraActions?: ActionDsl[],
+    ): void => {
       if (isDesignMode && DESIGN_SILENT_EVENTS.has(event)) return;
       const widget = findWidgetByName(page?.widgets ?? [], widgetName);
 
@@ -458,9 +597,14 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
        *
        * `events` still wins, so a document that uses the declared shape keeps
        * working and an import or a generator can write it.
+       *
+       * `extraActions` are handlers stored on the thing that fired — a table
+       * row button's own list — and run before the widget-level ones.
        */
       const configured = widget?.events?.[event] ?? widget?.properties?.[event];
-      const actions = Array.isArray(configured) ? (configured as ActionDsl[]) : [];
+      const fromWidget = Array.isArray(configured) ? (configured as ActionDsl[]) : [];
+      const extra = extraActions ?? [];
+      const actions = [...extra, ...fromWidget];
       if (actions.length === 0) return;
 
       const properties = widget ? resolveProperties(widget, evaluatedRef.current) : {};
@@ -510,6 +654,7 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
     fireEvent,
     queryState,
     runQuery,
+    ingestQueryResult,
     queryBindings,
     notifications,
     dismissNotification: (id) => setNotifications((p) => p.filter((n) => n.id !== id)),
@@ -533,6 +678,31 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
   };
 }
 
+function isRunnableQuery(query: QueryEntity): boolean {
+  const definition = query.definition as {
+    kind?: string;
+    sql?: string;
+    table?: string;
+    procedureName?: string;
+    functionName?: string;
+    path?: string;
+  };
+  switch (definition.kind) {
+    case 'raw_sql':
+      return Boolean(definition.sql?.trim());
+    case 'builder':
+      return Boolean(definition.table?.trim());
+    case 'stored_procedure':
+      return Boolean(definition.procedureName?.trim());
+    case 'function':
+      return Boolean(definition.functionName?.trim());
+    case 'api':
+      return Boolean(definition.path?.trim());
+    default:
+      return false;
+  }
+}
+
 function findWidgetByName(widgets: WidgetDsl[], name: string): WidgetDsl | undefined {
   for (const widget of widgets) {
     if (widget.name === name) return widget;
@@ -540,4 +710,92 @@ function findWidgetByName(widgets: WidgetDsl[], name: string): WidgetDsl | undef
     if (found) return found;
   }
   return undefined;
+}
+
+/** Read-side event scope: widget state like `Table1.selectedRow`, plus `event`. */
+function actionBindingScope(
+  liveExpressionScope: () => Record<string, unknown>,
+  payload?: Record<string, unknown>,
+): Record<string, unknown> {
+  const scope = liveExpressionScope();
+  if (!payload) return scope;
+  scope.event = payload;
+  for (const [key, value] of Object.entries(payload)) {
+    if (scope[key] === undefined) scope[key] = value;
+  }
+  return scope;
+}
+
+function applyWidgetMethod(
+  api: WidgetRuntimeApi,
+  method: SetWidgetMethod | undefined,
+  value: unknown,
+  property?: string,
+): void {
+  switch (method) {
+    case 'clearValue':
+      api.setValue('');
+      return;
+    case 'setDisabled':
+      api.setDisabled(Boolean(value));
+      return;
+    case 'setProperty':
+      api.setProperty(String(property ?? ''), value);
+      return;
+    case 'setOptions':
+      api.setOptions(value);
+      return;
+    default:
+      api.setValue(value);
+  }
+}
+
+function asWidgetApi(value: unknown): WidgetRuntimeApi | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Partial<WidgetRuntimeApi>;
+  if (typeof candidate.setValue !== 'function' || typeof candidate.setProperty !== 'function') {
+    return undefined;
+  }
+  return candidate as WidgetRuntimeApi;
+}
+
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
+}
+
+function triggerDownload(data: unknown, fileName: string, mimeType: string): void {
+  if (typeof data === 'string' && /^(https?:|blob:|data:)/i.test(data.trim())) {
+    const anchor = document.createElement('a');
+    anchor.href = data.trim();
+    anchor.download = fileName || 'download';
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    return;
+  }
+
+  const body = typeof data === 'string' ? data : JSON.stringify(data ?? '', null, 2);
+  const blob = new Blob([body], { type: mimeType || 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName || 'download';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }

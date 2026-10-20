@@ -8,6 +8,8 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 const executeSchema = z.object({
   source: z.enum(['draft', 'published']).default('draft'),
   environmentId: z.string().uuid(),
+  /** Current page, so a page-specific query can share a name with one on another page. */
+  pageId: z.string().optional(),
   /** Evaluated binding values, keyed by expression text. */
   bindings: z.record(z.unknown()).default({}),
 });
@@ -37,6 +39,7 @@ export class QueriesController {
       permissions: user.permissions,
       applicationId,
       queryName,
+      pageId: dto.pageId,
       source: dto.source,
       environmentId: dto.environmentId,
       bindings: dto.bindings,

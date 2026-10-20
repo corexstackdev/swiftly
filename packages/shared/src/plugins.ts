@@ -53,6 +53,8 @@ export interface PluginCapabilities {
   introspection: boolean;
   readOnlyConnections: boolean;
   pagination: boolean;
+  /** Create and alter schemas, tables, columns, and rows from the Data screen. */
+  schemaAdmin: boolean;
 }
 
 /* ------------------------------------------------------------------ *
@@ -99,6 +101,9 @@ export interface ColumnMetadata {
   dataType: string;
   nullable?: boolean;
   isPrimaryKey?: boolean;
+  isIdentity?: boolean;
+  hasDefault?: boolean;
+  defaultValue?: string | null;
 }
 
 export interface QueryResult {
@@ -155,6 +160,92 @@ export interface DbSchema {
 }
 
 /* ------------------------------------------------------------------ *
+ * Schema administration (optional — SQL databases)
+ * ------------------------------------------------------------------ */
+
+export type ColumnDefaultKind = 'none' | 'null' | 'now' | 'uuid' | 'literal';
+
+export interface ColumnSpec {
+  name: string;
+  dataType: string;
+  nullable?: boolean;
+  primaryKey?: boolean;
+  unique?: boolean;
+  identity?: boolean;
+  defaultKind?: ColumnDefaultKind;
+  defaultValue?: string;
+}
+
+export interface ColumnPatch {
+  dataType?: string;
+  nullable?: boolean;
+  defaultKind?: ColumnDefaultKind;
+  defaultValue?: string;
+}
+
+export interface CreateTableInput {
+  schema: string;
+  name: string;
+  columns: ColumnSpec[];
+}
+
+export interface TableRowsPage {
+  rows: Record<string, unknown>[];
+  columns: ColumnMetadata[];
+  totalRows: number;
+  durationMs: number;
+}
+
+export interface SchemaAdmin<TConfig = unknown> {
+  createSchema(config: TConfig, name: string): Promise<void>;
+  dropSchema(config: TConfig, name: string, cascade?: boolean): Promise<void>;
+  createTable(config: TConfig, input: CreateTableInput): Promise<void>;
+  dropTable(config: TConfig, schema: string, table: string): Promise<void>;
+  renameTable(config: TConfig, schema: string, table: string, newName: string): Promise<void>;
+  addColumn(config: TConfig, schema: string, table: string, column: ColumnSpec): Promise<void>;
+  alterColumn(
+    config: TConfig,
+    schema: string,
+    table: string,
+    name: string,
+    patch: ColumnPatch,
+  ): Promise<void>;
+  dropColumn(config: TConfig, schema: string, table: string, name: string): Promise<void>;
+  renameColumn(
+    config: TConfig,
+    schema: string,
+    table: string,
+    name: string,
+    newName: string,
+  ): Promise<void>;
+  listRows(
+    config: TConfig,
+    schema: string,
+    table: string,
+    options: { limit: number; offset: number },
+  ): Promise<TableRowsPage>;
+  insertRow(
+    config: TConfig,
+    schema: string,
+    table: string,
+    values: Record<string, unknown>,
+  ): Promise<void>;
+  updateRow(
+    config: TConfig,
+    schema: string,
+    table: string,
+    key: Record<string, unknown>,
+    values: Record<string, unknown>,
+  ): Promise<void>;
+  deleteRows(
+    config: TConfig,
+    schema: string,
+    table: string,
+    keys: Record<string, unknown>[],
+  ): Promise<void>;
+}
+
+/* ------------------------------------------------------------------ *
  * The plugin
  * ------------------------------------------------------------------ */
 
@@ -178,6 +269,7 @@ export interface DatasourcePlugin<TConfig = unknown, TQuery = unknown> {
     ctx: ExecutionContext,
   ): Promise<QueryResult>;
   introspect?(config: TConfig): Promise<DbSchema>;
+  schemaAdmin?: SchemaAdmin<TConfig>;
   /** Releases pooled connections held for a datasource. */
   dispose?(datasourceId: string): Promise<void>;
 }

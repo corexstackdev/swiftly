@@ -9,9 +9,9 @@ export const PERMISSIONS = {
   APP_CREATE: 'app:create',
   APP_EDIT: 'app:edit',
   APP_DELETE: 'app:delete',
-  /** Submit a version for IT review. Builders have this. */
+  /** Submit a version for review (legacy). Builders also use this to publish. */
   APP_SUBMIT: 'app:submit',
-  /** Approve and deploy a version. This is the IT gate. */
+  /** Publish a frozen version to an environment. */
   APP_PUBLISH: 'app:publish',
 
   // Datasources
@@ -47,8 +47,8 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 export const ALL_PERMISSIONS: Permission[] = Object.values(PERMISSIONS);
 
 /**
- * Built-in roles seeded for every organization. `App Builder` deliberately lacks
- * `app:publish` — that separation is the whole point of the IT gate.
+ * Built-in roles seeded for every organization. Builders publish the draft to
+ * the environment they have selected (dev, test, stage, or production).
  */
 export const SYSTEM_ROLES: Record<string, { description: string; permissions: Permission[] }> = {
   'Org Admin': {
@@ -56,12 +56,13 @@ export const SYSTEM_ROLES: Record<string, { description: string; permissions: Pe
     permissions: ALL_PERMISSIONS,
   },
   'App Builder': {
-    description: 'Builds and submits applications, but cannot publish them',
+    description: 'Builds applications and publishes them to an environment',
     permissions: [
       PERMISSIONS.APP_VIEW,
       PERMISSIONS.APP_CREATE,
       PERMISSIONS.APP_EDIT,
       PERMISSIONS.APP_SUBMIT,
+      PERMISSIONS.APP_PUBLISH,
       PERMISSIONS.DATASOURCE_VIEW,
       PERMISSIONS.DATASOURCE_CREATE,
       PERMISSIONS.DATASOURCE_EDIT,
@@ -71,7 +72,7 @@ export const SYSTEM_ROLES: Record<string, { description: string; permissions: Pe
     ],
   },
   'IT Reviewer': {
-    description: 'Reviews and publishes submitted applications',
+    description: 'Publishes applications and audits changes',
     permissions: [
       PERMISSIONS.APP_VIEW,
       PERMISSIONS.APP_PUBLISH,

@@ -1,5 +1,6 @@
 import {
   jsObjectsOnPage,
+  queriesOnPage,
   type ApplicationDsl,
   type PageDsl,
   type QueryEntity,
@@ -23,6 +24,8 @@ import { jsObjectStub } from './jsObjects';
 
 export interface QueryRuntimeState {
   data: Record<string, unknown>[];
+  /** Column names the driver reported, used when a row object has no keys yet. */
+  columns?: string[];
   isLoading: boolean;
   error: string | null;
   lastRunAt: number | null;
@@ -80,7 +83,7 @@ export function buildDataTree(input: BuildInput): DataTreeResult {
   const bindings: Record<string, unknown> = {};
   const queryExpressions: Record<string, string> = {};
 
-  for (const query of input.dsl.queries) {
+  for (const query of queriesOnPage(input.dsl.queries, input.page.id)) {
     // Expressions inside the query itself are bindings too: the table name a filter
     // reads, the value a WHERE clause compares against. They are registered here so
     // the same dependency graph evaluates them.
@@ -131,6 +134,8 @@ export function buildDataTree(input: BuildInput): DataTreeResult {
       }
     }
 
+    registerQuerySourceBinding(widget, bindings);
+
     /*
      * A key the widget declares as exposed state is its own answer to what it is
      * currently showing, so it wins over a property of the same name. Text is
@@ -169,7 +174,61 @@ export function resolveProperties(
       resolved[key] = result ? result.value : undefined;
     }
   }
+  if (widget.properties.sourceKind === 'query') {
+    const result = evaluated[`${widget.name}.sourceData`];
+    if (result) resolved.sourceData = result.value;
+  }
   return resolved;
+}
+
+/**
+ * Queries a widget is mapped to. Binding a table (or select) to a query is the
+ * signal to load it — the widget should not wait for a separate Run click.
+ */
+export function boundQueryNames(widgets: WidgetDsl[]): string[] {
+  const names = new Set<string>();
+  walkWidgets(widgets, (widget) => {
+    if (widget.properties.sourceKind !== 'query') return;
+    const name =
+      typeof widget.properties.sourceQuery === 'string' ? widget.properties.sourceQuery.trim() : '';
+    if (name) names.add(name);
+  });
+  return [...names];
+}
+
+/**
+ * Rows/options come from the query runtime, not from a leftover JSON property or
+ * a worker tick that has not caught up yet. Mapping `sourceQuery` is enough.
+ */
+export function applyQuerySource(
+  properties: Record<string, unknown>,
+  queryState: Record<string, QueryRuntimeState>,
+): Record<string, unknown> {
+  if (properties.sourceKind !== 'query') return properties;
+  const name =
+    typeof properties.sourceQuery === 'string' ? properties.sourceQuery.trim() : '';
+  if (!name) return properties;
+  const state = queryState[name];
+  if (!state) return properties;
+  return {
+    ...properties,
+    sourceData: state.data,
+    sourceColumns: state.columns,
+    sourceLoading: state.isLoading,
+    queryError: state.error,
+  };
+}
+
+/** A widget whose rows/options come from a named query reads `{{ Query.data }}`. */
+function registerQuerySourceBinding(
+  widget: WidgetDsl,
+  bindings: Record<string, unknown>,
+): void {
+  if (widget.properties.sourceKind !== 'query') return;
+  const queryName =
+    typeof widget.properties.sourceQuery === 'string' ? widget.properties.sourceQuery.trim() : '';
+  if (!queryName) return;
+  bindings[`${widget.name}.sourceData`] = `{{ ${queryName}.data }}`;
 }
 
 export function emptyQueryState(): QueryRuntimeState {
@@ -177,5 +236,7 @@ export function emptyQueryState(): QueryRuntimeState {
 }
 
 export function toQueryState(result: QueryResult): QueryRuntimeState {
-  return { data: result.rows, isLoading: false, error: null, lastRunAt: Date.now() };
+  const data = Array.isArray(result.rows) ? result.rows : [];
+  const columns = (result.columns ?? []).map((column) => column.name).filter(Boolean);
+  return { data, columns: columns.length > 0 ? columns : undefined, isLoading: false, error: null, lastRunAt: Date.now() };
 }

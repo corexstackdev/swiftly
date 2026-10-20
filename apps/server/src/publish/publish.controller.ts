@@ -6,6 +6,9 @@ import { PERMISSIONS } from '../common/permissions';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 
 const submitSchema = z.object({ changeNote: z.string().max(1000).optional() });
+const publishSchema = z.object({
+  environmentIds: z.array(z.string().uuid()).min(1, 'Select at least one environment'),
+});
 const reviewSchema = z.object({ notes: z.string().max(2000).optional() });
 const rejectSchema = z.object({ reason: z.string().min(1).max(2000) });
 const rollbackSchema = z.object({ targetVersionId: z.string().uuid() });
@@ -13,6 +16,22 @@ const rollbackSchema = z.object({ targetVersionId: z.string().uuid() });
 @Controller()
 export class PublishController {
   constructor(private readonly publish: PublishService) {}
+
+  @Post('applications/:id/publish')
+  @RequirePermissions(PERMISSIONS.APP_PUBLISH)
+  publishToEnvironment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(publishSchema)) dto: z.infer<typeof publishSchema>,
+  ) {
+    return this.publish.publishToEnvironments(
+      user.organizationId,
+      user.id,
+      user.permissions,
+      id,
+      dto.environmentIds,
+    );
+  }
 
   @Post('applications/:id/submit')
   @RequirePermissions(PERMISSIONS.APP_SUBMIT)

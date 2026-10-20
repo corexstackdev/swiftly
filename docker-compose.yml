@@ -29,21 +29,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # Sample target database for developing and testing datasource plugins.
-  # Not part of the platform; gives the Postgres plugin something real to query.
-  sample-db:
-    image: postgres:16-alpine
-    container_name: swiftly-sample-db
-    environment:
-      POSTGRES_USER: sample
-      POSTGRES_PASSWORD: sample_dev
-      POSTGRES_DB: sample
-    ports:
-      - '5453:5432'
-    volumes:
-      - sampledata:/var/lib/postgresql/data
-
 volumes:
   pgdata:
   redisdata:
-  sampledata:

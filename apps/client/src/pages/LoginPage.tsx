@@ -1,48 +1,20 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { useSession } from '@/lib/session';
-
-/**
- * Sign in.
- *
- * The seeded accounts are prefilled during development only. They come from
- * `prisma/seed.ts` and exist on a local database, so they are not a secret — but
- * the whole block sits behind `import.meta.env.DEV`, which Vite evaluates at build
- * time and then tree-shakes, so none of it reaches a production bundle.
- */
-
-const DEV_ACCOUNTS = [
-  {
-    email: 'builder@acme.test',
-    password: 'Password123!',
-    role: 'App Builder',
-    note: 'Builds and submits, cannot publish',
-  },
-  {
-    email: 'reviewer@acme.test',
-    password: 'Password123!',
-    role: 'IT Reviewer',
-    note: 'Reviews and publishes, cannot edit',
-  },
-  {
-    email: 'admin@acme.test',
-    password: 'Password123!',
-    role: 'Org Admin',
-    note: 'Everything',
-  },
-] as const;
-
-const DEFAULT_ACCOUNT = DEV_ACCOUNTS[0];
+import { safeInternalPath } from '@/lib/paths';
 
 export function LoginPage() {
   const { user, login, loading } = useSession();
-  const [email, setEmail] = useState(import.meta.env.DEV ? DEFAULT_ACCOUNT.email : '');
-  const [password, setPassword] = useState(import.meta.env.DEV ? DEFAULT_ACCOUNT.password : '');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [searchParams] = useSearchParams();
+  const next = safeInternalPath(searchParams.get('from')) ?? '/apps';
+
   if (loading) return null;
-  if (user) return <Navigate to="/apps" replace />;
+  if (user) return <Navigate to={next} replace />;
 
   const signIn = async (withEmail: string, withPassword: string): Promise<void> => {
     setBusy(true);
@@ -103,37 +75,6 @@ export function LoginPage() {
         >
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
-
-        {import.meta.env.DEV && (
-          <section className="mt-5 rounded border border-dashed border-amber-300 bg-amber-50 p-3">
-            <p className="mb-2 text-[11px] font-semibold tracking-wide text-amber-800 uppercase">
-              Development accounts
-            </p>
-            <div className="flex flex-col gap-1">
-              {DEV_ACCOUNTS.map((account) => (
-                <button
-                  key={account.email}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setEmail(account.email);
-                    setPassword(account.password);
-                    void signIn(account.email, account.password);
-                  }}
-                  className="flex items-baseline gap-2 rounded px-2 py-1 text-left hover:bg-amber-100 disabled:opacity-50"
-                >
-                  <span className="text-xs font-medium text-amber-900">{account.role}</span>
-                  <span className="truncate text-[11px] text-amber-700">{account.note}</span>
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 px-2 text-[11px] text-amber-700">
-              Seeded by <code>prisma/seed.ts</code>, password{' '}
-              <code>{DEFAULT_ACCOUNT.password}</code>. This block is stripped from production
-              builds.
-            </p>
-          </section>
-        )}
 
         <p className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-400">
           Single sign-on through Active Directory is configured per organization by an

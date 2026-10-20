@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import type { PageDsl, WidgetDsl } from '@swiftly/shared';
+import type { ActionDsl, PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getWidget, getWidgetDefinition } from '@/widgets/registry';
 import { requiredContainerHeight } from './widgetOps';
 import { GRID_COLUMNS, GRID_ROW_HEIGHT, GRID_GAP, runtimeHost } from '@/runtime/PageRenderer';
@@ -20,9 +20,11 @@ import 'react-resizable/css/styles.css';
  * layout a builder sees while designing is not the layout the runtime produces.
  *
  * Nesting react-grid-layout has one catch: a drag inside a child grid would also
- * drag the parent. A container's child area is therefore marked `.nested-canvas`,
- * which the parent grid lists in `draggableCancel`, and the container is moved by
- * its name label instead.
+ * drag the parent. A container's child area is therefore marked `.nested-canvas`.
+ * Every grid cancels that class (react-draggable only walks up to the item, so a
+ * grid's own wrapping canvas is not in the walk) and the nested canvas stops
+ * mousedown from reaching ancestor grids. The container is moved by its name
+ * label instead.
  */
 
 export interface CanvasHandlers {
@@ -40,6 +42,8 @@ export interface CanvasHandlers {
   /** Writes properties onto a widget, for direct manipulation such as a cell resize. */
   onUpdateProperties: (widgetId: string, patch: Record<string, unknown>) => void;
   onDelete: (widgetId: string) => void;
+  /** Generate form fields from a database table. */
+  onImportFormFromTable?: (formWidgetId: string) => void;
 }
 
 /**
@@ -119,6 +123,11 @@ function useMeasuredWidth(): [(node: HTMLDivElement | null) => void, number | nu
   });
 
   return [ref, width];
+}
+
+/** Keep a nested drag from also moving the Container / Modal that wraps this grid. */
+function stopNestedCanvasPointer(event: React.MouseEvent): void {
+  event.stopPropagation();
 }
 
 /** Clicking empty canvas must drop both the blue selection and the caret in a field. */
@@ -281,7 +290,7 @@ function CanvasGrid({
       width={Math.max(width, 120)}
       margin={[GRID_GAP, GRID_GAP]}
       containerPadding={
-        depth === 0 ? [GRID_GAP, PAGE_GRID_PADDING_Y] : [GRID_GAP, 16]
+        depth === 0 ? [GRID_GAP, PAGE_GRID_PADDING_Y] : [GRID_GAP, PAGE_GRID_PADDING_Y]
       }
       /*
        * Free placement. Vertical compaction packed every widget to the top of
@@ -328,6 +337,12 @@ function CanvasGrid({
       }}
       // Inputs are `.no-drag` so they can be typed into; grab the label, the
       // left grip, or any chrome that is not the field itself.
+      //
+      // `.nested-canvas` must be cancelled at every depth, not only the page.
+      // react-draggable stops the cancel walk at this grid item, so an inner
+      // grid can still drag its children. Without it, a Container that holds a
+      // Modal (or a Modal that holds a Form) steals the drag and moves the
+      // wrapper instead of the field.
       draggableCancel=".no-drag, .nested-canvas, input, textarea, select"
       resizeHandles={RESIZE_HANDLES}
       resizeHandle={(axis, handleRef) => (
@@ -414,12 +429,16 @@ function DesignWidget({
     properties: runtime.properties(widget.name),
     state: runtime.widgetState[widget.name] ?? {},
     setState: (patch: Record<string, unknown>) => runtime.setWidgetState(widget.name, patch),
-    fireEvent: (event: string, payload?: Record<string, unknown>) =>
-      runtime.fireEvent(widget.name, event, payload),
+    fireEvent: (
+      event: string,
+      payload?: Record<string, unknown>,
+      extraActions?: ActionDsl[],
+    ) => runtime.fireEvent(widget.name, event, payload, extraActions),
     isDesignMode: true as const,
     host: {
       ...runtimeHost(runtime),
       dropIntoContainer: handlers.onDropIntoContainer,
+      openFormTableImport: handlers.onImportFormFromTable,
     },
   };
 
@@ -446,8 +465,9 @@ function DesignWidget({
   if (registered.definition.childLayout === 'cells') {
     return (
       <div
-        className="nested-canvas h-full w-full"
+        className="nested-canvas h-full w-full overflow-visible"
         data-drop-parent={widget.id}
+        onMouseDown={stopNestedCanvasPointer}
         onDragOver={(event) => acceptPaletteDrag(event)}
         onDrop={(event) => {
           const type = takePaletteDrop(event);
@@ -486,8 +506,9 @@ function DesignWidget({
           renderChildren={(filter) => (
             <div
               ref={innerRef}
-              className="nested-canvas h-full min-h-20 w-full"
+              className="nested-canvas h-full min-h-20 w-full overflow-visible"
               data-drop-parent={widget.id}
+              onMouseDown={stopNestedCanvasPointer}
               onClick={(event) => {
                 event.stopPropagation();
                 const hit = (event.target as HTMLElement).closest('[data-canvas-widget]');
@@ -508,11 +529,16 @@ function DesignWidget({
                 />
               )}
 
-              {(widget.children ?? []).length === 0 && (
-                <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-slate-300">
-                  Drop widgets here
-                </p>
-              )}
+              {(widget.children ?? []).length === 0 &&
+                (widget.type === 'form' && handlers.onImportFormFromTable ? (
+                  <FormImportEmptyState
+                    onImport={() => handlers.onImportFormFromTable?.(widget.id)}
+                  />
+                ) : (
+                  <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-slate-300">
+                    Drop widgets here
+                  </p>
+                ))}
             </div>
           )}
         />
@@ -593,6 +619,8 @@ function WidgetLabel({
 }) {
   return (
     <span
+      role="button"
+      aria-label={`Move ${widget.name}`}
       className={clsx(
         'widget-drag-handle absolute -top-5 left-0 z-20 flex items-center gap-1 rounded-t px-1.5 py-0.5 text-[10px] font-medium text-white',
         'cursor-grab active:cursor-grabbing',
@@ -633,6 +661,25 @@ function WidgetDeleteButton({ name, onDelete }: { name: string; onDelete: () => 
       <TrashIcon />
       Delete
     </button>
+  );
+}
+
+function FormImportEmptyState({ onImport }: { onImport: () => void }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center">
+      <p className="text-[11px] text-slate-400">Drop widgets here, or generate them from a table</p>
+      <button
+        type="button"
+        className="pointer-events-auto no-drag rounded border border-dashed border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onImport();
+        }}
+      >
+        Import from table
+      </button>
+    </div>
   );
 }
 

@@ -1,7 +1,17 @@
 import { useState } from 'react';
 import clsx from 'clsx';
+import type { ApplicationDsl } from '@swiftly/shared';
 import { control, controlCompact, dashedButton, ghostButton, Select } from './controls';
-import { normaliseColumns, type TableColumnConfig } from '@/widgets/tableColumns';
+import { ActionEditor } from './ActionEditor';
+import {
+  defaultActionsColumn,
+  isActionsColumn,
+  normaliseColumns,
+  TABLE_ROW_ACTION_KINDS,
+  type TableColumnConfig,
+  type TableRowAction,
+  type TableRowActionKind,
+} from '@/widgets/tableColumns';
 
 /**
  * Per-column settings for a table.
@@ -20,10 +30,14 @@ import { normaliseColumns, type TableColumnConfig } from '@/widgets/tableColumns
 export function ColumnConfigEditor({
   value,
   availableKeys,
+  dsl,
+  pageId,
   onChange,
 }: {
   value: unknown;
   availableKeys: string[];
+  dsl: ApplicationDsl;
+  pageId: string;
   onChange: (columns: TableColumnConfig[]) => void;
 }) {
   const columns = normaliseColumns(value);
@@ -52,6 +66,20 @@ export function ColumnConfigEditor({
     setExpanded(key);
   };
 
+  const addActions = (): void => {
+    const seeded =
+      columns.length === 0
+        ? availableKeys.map((key) => ({ key, source: 'data' as const }))
+        : columns;
+    const column = defaultActionsColumn(seeded);
+    onChange([...seeded, column]);
+    setExpanded(column.key);
+  };
+
+  const setActions = (index: number, actions: TableRowAction[]): void => {
+    update(index, { actions });
+  };
+
   const missing = availableKeys.filter((key) => !columns.some((column) => column.key === key));
 
   if (columns.length === 0) {
@@ -59,7 +87,7 @@ export function ColumnConfigEditor({
       <div className="no-drag flex flex-col gap-1.5">
         <p className="text-[11px] leading-snug text-slate-400">
           Showing every column the query returns. Take control of them to rename, reorder,
-          resize, format, hide, or make them editable.
+          resize, format, hide, or add Edit / Delete / Download buttons.
         </p>
         <button
           type="button"
@@ -70,6 +98,14 @@ export function ColumnConfigEditor({
           {availableKeys.length === 0
             ? 'Bind data first'
             : `Configure ${availableKeys.length} columns`}
+        </button>
+        <button
+          type="button"
+          disabled={availableKeys.length === 0}
+          onClick={addActions}
+          className={clsx(dashedButton, availableKeys.length === 0 && 'opacity-50')}
+        >
+          + Add an actions column
         </button>
       </div>
     );
@@ -122,6 +158,11 @@ export function ColumnConfigEditor({
                     added
                   </span>
                 )}
+                {isActionsColumn(column) && (
+                  <span className="shrink-0 rounded bg-emerald-100 px-1 text-[9px] font-medium text-emerald-700">
+                    actions
+                  </span>
+                )}
                 {column.editable && (
                   <span className="shrink-0 rounded bg-blue-100 px-1 text-[9px] font-medium text-blue-700">
                     edit
@@ -152,7 +193,7 @@ export function ColumnConfigEditor({
                   />
                 </Field>
 
-                {column.source === 'static' && (
+                {(column.source === 'static' || isActionsColumn(column)) && (
                   <Field label="Field name" help="How bindings and edits refer to it.">
                     <input
                       value={column.key}
@@ -199,6 +240,7 @@ export function ColumnConfigEditor({
                   </Field>
                 </div>
 
+                {!isActionsColumn(column) && (
                 <Field label="Show as">
                   <Select
                     compact
@@ -219,6 +261,7 @@ export function ColumnConfigEditor({
                     <option value="relative">Relative time</option>
                   </Select>
                 </Field>
+                )}
 
                 {(column.format === 'number' ||
                   column.format === 'currency' ||
@@ -254,34 +297,48 @@ export function ColumnConfigEditor({
                   </div>
                 )}
 
-                <Field
-                  label={column.source === 'static' ? 'Value' : 'When empty, show'}
-                  help={
-                    column.source === 'static'
-                      ? 'Every row starts with this.'
-                      : 'Used wherever the row has nothing.'
-                  }
-                >
-                  <input
-                    value={String(column.defaultValue ?? '')}
-                    onChange={(event) =>
-                      update(index, { defaultValue: event.target.value || undefined })
-                    }
-                    className={controlCompact}
-                  />
-                </Field>
+                {!isActionsColumn(column) && (
+                  <>
+                    <Field
+                      label={column.source === 'static' ? 'Value' : 'When empty, show'}
+                      help={
+                        column.source === 'static'
+                          ? 'Every row starts with this.'
+                          : 'Used wherever the row has nothing.'
+                      }
+                    >
+                      <input
+                        value={String(column.defaultValue ?? '')}
+                        onChange={(event) =>
+                          update(index, { defaultValue: event.target.value || undefined })
+                        }
+                        className={controlCompact}
+                      />
+                    </Field>
 
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={column.editable === true}
-                    onChange={(event) => update(index, { editable: event.target.checked })}
-                    className="h-3 w-3 accent-blue-600"
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={column.editable === true}
+                        onChange={(event) => update(index, { editable: event.target.checked })}
+                        className="h-3 w-3 accent-blue-600"
+                      />
+                      <span className="text-[11px] text-slate-600">
+                        Editable — double-click a cell
+                      </span>
+                    </label>
+                  </>
+                )}
+
+                {isActionsColumn(column) && (
+                  <ActionsPicker
+                    actions={column.actions ?? []}
+                    availableKeys={availableKeys}
+                    dsl={dsl}
+                    pageId={pageId}
+                    onChange={(actions) => setActions(index, actions)}
                   />
-                  <span className="text-[11px] text-slate-600">
-                    Editable — double-click a cell
-                  </span>
-                </label>
+                )}
               </div>
             )}
           </div>
@@ -310,6 +367,10 @@ export function ColumnConfigEditor({
           + Add a column with a default
         </button>
 
+        <button type="button" onClick={addActions} className={dashedButton}>
+          + Add an actions column
+        </button>
+
         <button
           type="button"
           onClick={() => onChange([])}
@@ -318,6 +379,140 @@ export function ColumnConfigEditor({
           Reset to every column
         </button>
       </div>
+    </div>
+  );
+}
+
+function ActionsPicker({
+  actions,
+  availableKeys,
+  dsl,
+  pageId,
+  onChange,
+}: {
+  actions: TableRowAction[];
+  availableKeys: string[];
+  dsl: ApplicationDsl;
+  pageId: string;
+  onChange: (actions: TableRowAction[]) => void;
+}) {
+  const enabled = new Set(actions.map((action) => action.kind));
+
+  const toggle = (kind: TableRowActionKind, on: boolean): void => {
+    if (!on) {
+      onChange(actions.filter((action) => action.kind !== kind));
+      return;
+    }
+    if (enabled.has(kind)) return;
+    const order = TABLE_ROW_ACTION_KINDS.map((entry) => entry.kind);
+    onChange(
+      [...actions, { kind }].sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind)),
+    );
+  };
+
+  const patch = (kind: TableRowActionKind, next: Partial<TableRowAction>): void => {
+    onChange(actions.map((action) => (action.kind === kind ? { ...action, ...next } : action)));
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[10px] font-medium text-slate-500">Buttons on each row</span>
+      {TABLE_ROW_ACTION_KINDS.map((entry) => {
+        const current = actions.find((action) => action.kind === entry.kind);
+        return (
+          <div key={entry.kind} className="rounded border border-slate-200 bg-white p-1.5">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={Boolean(current)}
+                onChange={(event) => toggle(entry.kind, event.target.checked)}
+                className="h-3 w-3 accent-blue-600"
+              />
+              <span className="text-[11px] font-medium text-slate-700">{entry.label}</span>
+              {current?.onClick && current.onClick.length > 0 && (
+                <span className="ml-auto text-[9px] font-medium text-slate-400">
+                  {current.onClick.length} handler{current.onClick.length === 1 ? '' : 's'}
+                </span>
+              )}
+            </label>
+            {current && (
+              <div className="mt-1.5 flex flex-col gap-1.5">
+                <Field label="Button label">
+                  <input
+                    value={current.label ?? ''}
+                    placeholder={entry.label}
+                    onChange={(event) =>
+                      patch(entry.kind, { label: event.target.value || undefined })
+                    }
+                    className={controlCompact}
+                  />
+                </Field>
+                {entry.kind === 'download' && (
+                  <>
+                    <Field
+                      label="File from column"
+                      help="A URL, or the file contents. Leave blank to handle download in a handler."
+                    >
+                      <Select
+                        compact
+                        value={current.downloadKey ?? ''}
+                        onChange={(next) =>
+                          patch(entry.kind, { downloadKey: next || undefined })
+                        }
+                      >
+                        <option value="">None — run handlers only</option>
+                        {availableKeys.map((key) => (
+                          <option key={key} value={key}>
+                            {key}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="File name column">
+                      <Select
+                        compact
+                        value={current.fileNameKey ?? ''}
+                        onChange={(next) =>
+                          patch(entry.kind, { fileNameKey: next || undefined })
+                        }
+                      >
+                        <option value="">download</option>
+                        {availableKeys.map((key) => (
+                          <option key={key} value={key}>
+                            {key}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </>
+                )}
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[10px] font-medium text-slate-500">Event handlers</span>
+                  <p className="text-[10px] leading-snug text-slate-400">
+                    Each runs on click, in order. The row is event.row.
+                  </p>
+                  <ActionEditor
+                    actions={current.onClick ?? []}
+                    dsl={dsl}
+                    pageId={pageId}
+                    hint="Add a handler — run a query, notify, navigate, copy, or run JS."
+                    onChange={(onClick) =>
+                      patch(entry.kind, {
+                        onClick: onClick.length > 0 ? onClick : undefined,
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {actions.length === 0 && (
+        <p className="text-[10px] leading-snug text-slate-400">
+          Pick at least one button, then add event handlers on the click.
+        </p>
+      )}
     </div>
   );
 }

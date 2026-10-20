@@ -9,16 +9,14 @@ import { useSession } from '@/lib/session';
  * It is fixed, because it is the only thing on these screens that never changes:
  * where you are, where else you can go, and who you are signed in as. A list of
  * applications can run to several screens, and having to scroll back up to reach
- * the account menu or the review queue is the kind of small friction that makes
- * an internal tool feel unfinished.
+ * the account menu is the kind of small friction that makes an internal tool
+ * feel unfinished.
  *
  * The editor keeps its own header — it needs the room for page, undo, save state
  * and publish — so this is deliberately not shared with it.
  */
 
-export function AppHeader({ reviewCount }: { reviewCount?: number }) {
-  const { can } = useSession();
-
+export function AppHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
       <div className="flex h-14 items-center gap-4 px-6">
@@ -35,11 +33,6 @@ export function AppHeader({ reviewCount }: { reviewCount?: number }) {
 
         <nav className="ml-4 flex items-center gap-1">
           <HeaderLink to="/apps">Applications</HeaderLink>
-          {can('app:publish') && (
-            <HeaderLink to="/reviews" badge={reviewCount}>
-              Review queue
-            </HeaderLink>
-          )}
         </nav>
 
         <div className="ml-auto">

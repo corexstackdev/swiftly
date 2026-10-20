@@ -1,10 +1,20 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { jsObjectsOnPage, type ApplicationDsl, type PageDsl } from '@swiftly/shared';
+import {
+  isAppLevelEntity,
+  jsObjectsOnPage,
+  queriesOnPage,
+  type ApplicationDsl,
+  type JsObjectDsl,
+  type PageDsl,
+  type QueryEntity,
+} from '@swiftly/shared';
 import type { DatasourceSummary } from '@/lib/api';
+import { inspectJsObject } from '@/evaluation/jsObjects';
 import { WidgetPalette } from './WidgetPalette';
 import { WidgetTree } from './WidgetTree';
 import { JsObjectMenuButton } from './JsObjectMenu';
+import { QueryMenuButton } from './QueryMenu';
 
 /**
  * The entity panel: the one place things get added.
@@ -25,7 +35,6 @@ export function EntityPanel({
   selectedJsId,
   onSelectQuery,
   onCreateQuery,
-  onDeleteQuery,
   onSelectWidget,
   onDeleteWidget,
   onCreateJsObject,
@@ -33,7 +42,13 @@ export function EntityPanel({
   onRenameJsObject,
   onCopyJsObject,
   onMoveJsObject,
+  onMakeJsGlobal,
   onDeleteJsObject,
+  onRenameQuery,
+  onCopyQuery,
+  onMoveQuery,
+  onMakeQueryGlobal,
+  onDeleteQuery,
   onAddWidget,
 }: {
   dsl: ApplicationDsl;
@@ -44,31 +59,37 @@ export function EntityPanel({
   selectedJsId: string | null;
   onSelectQuery: (name: string | null) => void;
   onCreateQuery: (datasourceId: string) => void;
-  onDeleteQuery: (name: string) => void;
   onSelectWidget: (widgetId: string) => void;
   /** Adds a widget from the palette without a drag. */
   onAddWidget: (widgetType: string) => void;
   onDeleteWidget: (widgetId: string) => void;
-  onCreateJsObject: () => void;
+  onCreateJsObject: (scope: 'page' | 'app') => void;
   onSelectJsObject: (id: string) => void;
   onRenameJsObject: (id: string, name: string) => void;
   onCopyJsObject: (id: string, pageId: string) => void;
   onMoveJsObject: (id: string, pageId: string) => void;
+  onMakeJsGlobal: (id: string) => void;
   onDeleteJsObject: (id: string) => void;
+  onRenameQuery: (id: string, name: string) => void;
+  onCopyQuery: (id: string, pageId: string) => void;
+  onMoveQuery: (id: string, pageId: string) => void;
+  onMakeQueryGlobal: (id: string) => void;
+  onDeleteQuery: (id: string) => void;
 }) {
   const [tab, setTab] = useState<EntityTab>('ui');
   // The UI tab is the page's structure by default; the palette is what you open
   // to add to it. Once a page has widgets, finding one matters more than adding.
   const [showPalette, setShowPalette] = useState(false);
-  const pageJsObjects = jsObjectsOnPage(dsl.jsObjects, page?.id ?? '');
+  const visibleJsObjects = jsObjectsOnPage(dsl.jsObjects, page?.id ?? '');
+  const visibleQueries = queriesOnPage(dsl.queries, page?.id ?? '');
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 border-b border-slate-200">
         <Tab active={tab === 'queries'} onClick={() => setTab('queries')}>
           Queries
-          {dsl.queries.length > 0 && (
-            <span className="ml-1 text-[10px] text-slate-400">{dsl.queries.length}</span>
+          {visibleQueries.length > 0 && (
+            <span className="ml-1 text-[10px] text-slate-400">{visibleQueries.length}</span>
           )}
         </Tab>
         <Tab active={tab === 'js'} onClick={() => setTab('js')}>
@@ -139,60 +160,64 @@ export function EntityPanel({
             </div>
 
             <ul className="flex-1 overflow-auto p-1">
-              {dsl.queries.map((query) => {
-                const datasource = datasources.find(
-                  (candidate) => candidate.id === query.datasourceId,
-                );
-                return (
-                  <li key={query.id} className="group/query">
+              <EntityGroup
+                items={visibleQueries}
+                empty={
+                  datasources.length === 0
+                    ? 'Connect a datasource in the Data section first.'
+                    : 'No queries yet — pick a datasource from + New.'
+                }
+                renderItem={(query) => {
+                  const datasource = datasources.find(
+                    (candidate) => candidate.id === query.datasourceId,
+                  );
+                  const selected = query.name === selectedQueryName;
+                  return (
                     <div
                       className={clsx(
-                        'flex items-center gap-1 rounded px-2 py-1',
-                        query.name === selectedQueryName
-                          ? 'bg-blue-50'
-                          : 'hover:bg-slate-100',
+                        'flex items-center gap-1 rounded px-1 py-0.5',
+                        selected ? 'bg-blue-50' : 'hover:bg-slate-100',
                       )}
                     >
                       <button
                         type="button"
                         onClick={() => onSelectQuery(query.name)}
-                        className="min-w-0 flex-1 text-left"
+                        className="min-w-0 flex-1 px-1 py-1 text-left"
                       >
-                        <span
-                          className={clsx(
-                            'block truncate text-xs',
-                            query.name === selectedQueryName
-                              ? 'font-medium text-blue-700'
-                              : 'text-slate-700',
-                          )}
-                        >
-                          {query.name}
+                        <span className="flex items-center gap-1">
+                          <span
+                            className={clsx(
+                              'truncate text-xs',
+                              selected ? 'font-medium text-blue-700' : 'text-slate-700',
+                            )}
+                          >
+                            {query.name}
+                          </span>
+                          {isAppLevelEntity(query) && <ScopeBadge />}
                         </span>
                         <span className="block truncate text-[10px] text-slate-400">
                           {datasource?.name ?? 'Missing datasource'} · {query.mode}
                           {query.runOnPageLoad && ' · on load'}
                         </span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteQuery(query.name)}
-                        className="rounded px-1 text-xs text-slate-400 opacity-0 group-hover/query:opacity-100 hover:bg-red-100 hover:text-red-600"
-                        aria-label={`Delete ${query.name}`}
-                      >
-                        ×
-                      </button>
+                      {selected && page && (
+                        <QueryMenuButton
+                          query={query}
+                          dsl={dsl}
+                          pages={dsl.pages}
+                          currentPageId={page.id}
+                          onRename={(name) => onRenameQuery(query.id, name)}
+                          onCopyToPage={(pageId) => onCopyQuery(query.id, pageId)}
+                          onMoveToPage={(pageId) => onMoveQuery(query.id, pageId)}
+                          onMakeGlobal={() => onMakeQueryGlobal(query.id)}
+                          onCopyToThisPage={() => onCopyQuery(query.id, page.id)}
+                          onDelete={() => onDeleteQuery(query.id)}
+                        />
+                      )}
                     </div>
-                  </li>
-                );
-              })}
-
-              {dsl.queries.length === 0 && (
-                <li className="px-2 py-3 text-xs text-slate-400">
-                  {datasources.length === 0
-                    ? 'Connect a datasource in the Data section first.'
-                    : 'No queries yet — pick a datasource from + New.'}
-                </li>
-              )}
+                  );
+                }}
+              />
             </ul>
           </div>
         )}
@@ -203,20 +228,33 @@ export function EntityPanel({
               <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
                 JS objects
               </span>
-              <button
-                type="button"
-                onClick={onCreateJsObject}
-                className="rounded border border-slate-300 px-1.5 py-0.5 text-xs text-slate-600 hover:bg-slate-50"
+              <select
+                value=""
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === 'page' || value === 'app') onCreateJsObject(value);
+                }}
+                className="rounded border border-slate-300 px-1 py-0.5 text-xs"
               >
-                + New
-              </button>
+                <option value="">+ New</option>
+                <option value="page">On this page</option>
+                <option value="app">Global (app)</option>
+              </select>
             </div>
 
             <ul className="flex-1 overflow-auto p-1">
-              {pageJsObjects.map((jsObject) => {
-                const selected = selectedJsId === jsObject.id;
-                return (
-                  <li key={jsObject.id ?? jsObject.name}>
+              <EntityGroup
+                items={visibleJsObjects}
+                empty={
+                  <>
+                    Helper functions on this page or globally, callable from a binding as{' '}
+                    <code className="text-slate-500">Utils.format(x)</code>.
+                  </>
+                }
+                renderItem={(jsObject) => {
+                  const selected = selectedJsId === jsObject.id;
+                  const broken = Boolean(inspectJsObject(jsObject.name, jsObject.code).error);
+                  return (
                     <div
                       className={clsx(
                         'flex items-center gap-0.5 rounded px-1 py-0.5',
@@ -231,7 +269,13 @@ export function EntityPanel({
                           selected ? 'font-medium text-blue-700' : 'text-slate-700',
                         )}
                       >
-                        {jsObject.name}
+                        <span className="flex items-center gap-1">
+                          <span className="truncate">{jsObject.name}</span>
+                          {broken && (
+                            <span className="shrink-0 text-[9px] font-medium text-red-600">error</span>
+                          )}
+                          {isAppLevelEntity(jsObject) && <ScopeBadge />}
+                        </span>
                       </button>
                       {selected && jsObject.id && page && (
                         <JsObjectMenuButton
@@ -242,25 +286,66 @@ export function EntityPanel({
                           onRename={(name) => onRenameJsObject(jsObject.id!, name)}
                           onCopyToPage={(pageId) => onCopyJsObject(jsObject.id!, pageId)}
                           onMoveToPage={(pageId) => onMoveJsObject(jsObject.id!, pageId)}
+                          onMakeGlobal={() => onMakeJsGlobal(jsObject.id!)}
+                          onCopyToThisPage={() => onCopyJsObject(jsObject.id!, page.id)}
                           onDelete={() => onDeleteJsObject(jsObject.id!)}
                         />
                       )}
                     </div>
-                  </li>
-                );
-              })}
-
-              {pageJsObjects.length === 0 && (
-                <li className="px-2 py-3 text-xs text-slate-400">
-                  Helper functions on this page, callable from a binding as{' '}
-                  <code className="text-slate-500">Utils.format(x)</code>.
-                </li>
-              )}
+                  );
+                }}
+              />
             </ul>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function EntityGroup<T extends QueryEntity | JsObjectDsl>({
+  items,
+  empty,
+  renderItem,
+}: {
+  items: T[];
+  empty: ReactNode;
+  renderItem: (item: T) => ReactNode;
+}) {
+  const globalItems = items.filter((item) => isAppLevelEntity(item));
+  const pageItems = items.filter((item) => !isAppLevelEntity(item));
+
+  if (items.length === 0) {
+    return <li className="px-2 py-3 text-xs text-slate-400">{empty}</li>;
+  }
+
+  return (
+    <>
+      {globalItems.length > 0 && (
+        <li className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">
+          Global
+        </li>
+      )}
+      {globalItems.map((item) => (
+        <li key={item.id ?? item.name}>{renderItem(item)}</li>
+      ))}
+      {pageItems.length > 0 && (
+        <li className="px-2 pt-2 pb-0.5 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">
+          This page
+        </li>
+      )}
+      {pageItems.map((item) => (
+        <li key={item.id ?? item.name}>{renderItem(item)}</li>
+      ))}
+    </>
+  );
+}
+
+function ScopeBadge() {
+  return (
+    <span className="shrink-0 rounded bg-slate-100 px-1 py-px text-[9px] font-medium tracking-wide text-slate-500 uppercase">
+      App
+    </span>
   );
 }
 
@@ -271,7 +356,7 @@ function Tab({
 }: {
   active: boolean;
   onClick: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button

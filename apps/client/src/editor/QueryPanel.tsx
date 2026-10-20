@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { DbSchema, QueryEntity, QueryResult } from '@swiftly/shared';
+import type { ApplicationDsl, DbSchema, PageDsl, QueryEntity, QueryResult } from '@swiftly/shared';
 import { api, type DatasourceSummary } from '@/lib/api';
+import { QueryMenuButton } from './QueryMenu';
+import { isJsIdentifier } from './jsObjectOps';
 
 /**
  * The query editor.
@@ -14,27 +16,49 @@ import { api, type DatasourceSummary } from '@/lib/api';
 
 export function QueryPanel({
   query,
+  dsl,
+  pages,
+  currentPageId,
   applicationId,
   environmentId,
   datasources,
   bindings,
   onChange,
+  onExecuted,
   onClose,
+  onRename,
+  onCopyToPage,
+  onMoveToPage,
+  onMakeGlobal,
+  onCopyToThisPage,
+  onDelete,
 }: {
   /** The query being edited, chosen in the entity panel. */
   query: QueryEntity | null;
+  dsl: ApplicationDsl;
+  pages: PageDsl[];
+  currentPageId: string;
   applicationId: string;
   environmentId: string;
   datasources: DatasourceSummary[];
   /** Evaluated values for this query's own bindings, keyed by expression text. */
   bindings: Record<string, unknown>;
   onChange: (mutate: (query: QueryEntity) => void) => void;
+  /** Pushes the Run result onto the canvas so bound widgets update immediately. */
+  onExecuted?: (result: QueryResult) => void;
   onClose: () => void;
+  onRename: (name: string) => void;
+  onCopyToPage: (pageId: string) => void;
+  onMoveToPage: (pageId: string) => void;
+  onMakeGlobal: () => void;
+  onCopyToThisPage: () => void;
+  onDelete: () => void;
 }) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [schema, setSchema] = useState<DbSchema | null>(null);
+  const [draftName, setDraftName] = useState(query?.name ?? '');
 
   const datasource = datasources.find((candidate) => candidate.id === query?.datasourceId);
 
@@ -54,6 +78,10 @@ export function QueryPanel({
     };
   }, [query?.id, datasource?.id, datasource?.pluginId, environmentId]);
 
+  useEffect(() => {
+    setDraftName(query?.name ?? '');
+  }, [query?.id, query?.name]);
+
   const run = async (): Promise<void> => {
     if (!query) return;
     setRunning(true);
@@ -66,6 +94,7 @@ export function QueryPanel({
         bindings,
       });
       setResult(response);
+      onExecuted?.(response);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -83,16 +112,31 @@ export function QueryPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-3 py-1.5">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-1.5">
         <input
-          value={query.name}
-          onChange={(event) => {
-            const next = event.target.value;
-            onChange((draft) => {
-              draft.name = next;
-            });
+          value={draftName}
+          aria-label="Query name"
+          onChange={(event) => setDraftName(event.target.value.replace(/[^\w]/g, ''))}
+          onBlur={() => {
+            if (draftName !== query.name && isJsIdentifier(draftName)) onRename(draftName);
+            else setDraftName(query.name);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') (event.target as HTMLInputElement).blur();
           }}
           className="w-40 rounded border border-slate-300 px-2 py-0.5 font-mono text-xs outline-none focus:border-blue-500"
+        />
+        <QueryMenuButton
+          query={query}
+          dsl={dsl}
+          pages={pages}
+          currentPageId={currentPageId}
+          onRename={onRename}
+          onCopyToPage={onCopyToPage}
+          onMoveToPage={onMoveToPage}
+          onMakeGlobal={onMakeGlobal}
+          onCopyToThisPage={onCopyToThisPage}
+          onDelete={onDelete}
         />
 
         <select
@@ -112,7 +156,9 @@ export function QueryPanel({
           ))}
         </select>
 
-        <span className="text-[11px] text-slate-400">{datasource?.name ?? 'No datasource'}</span>
+        <span className="text-[11px] text-slate-400">
+          {query.pageId ? 'This page' : 'Global'} · {datasource?.name ?? 'No datasource'}
+        </span>
 
         <label className="flex items-center gap-1 text-xs text-slate-600">
           <input
@@ -286,6 +332,75 @@ function QueryEditorBody({
     );
   }
 
+  if (definition.kind === 'builder') {
+    const tables =
+      schema?.schemas.flatMap((namespace) =>
+        namespace.tables.map((table) => ({
+          schema: namespace.name,
+          name: table.name,
+          columns: table.columns,
+        })),
+      ) ?? [];
+    const selectedKey =
+      definition.schema && definition.table
+        ? `${String(definition.schema)}::${String(definition.table)}`
+        : definition.table
+          ? `::${String(definition.table)}`
+          : '';
+    const selected = tables.find(
+      (table) =>
+        table.name === definition.table &&
+        (!definition.schema || table.schema === definition.schema),
+    );
+
+    return (
+      <div className="flex flex-col gap-3 p-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-slate-600">Table</span>
+          <select
+            value={selectedKey}
+            onChange={(event) => {
+              const [schemaName, tableName] = event.target.value.split('::');
+              onChange((draft) => {
+                const target = draft.definition as unknown as Record<string, unknown>;
+                target.schema = schemaName || undefined;
+                target.table = tableName ?? '';
+                target.operation = 'select';
+              });
+            }}
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="">{schema ? 'Select a table…' : 'Schema loading…'}</option>
+            {tables.map((table) => (
+              <option key={`${table.schema}::${table.name}`} value={`${table.schema}::${table.name}`}>
+                {table.schema}.{table.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-slate-600">Limit</span>
+          <input
+            value={String(definition.limit ?? '50')}
+            onChange={(event) =>
+              onChange((draft) => {
+                (draft.definition as unknown as Record<string, unknown>).limit = event.target.value;
+              })
+            }
+            className="w-32 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
+          />
+        </label>
+
+        {selected && (
+          <p className="font-mono text-[11px] text-slate-500">
+            {selected.columns.map((column) => column.name).join(', ') || 'No columns'}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   if (definition.kind === 'api') {
     return (
       <div className="flex flex-col gap-3 p-3">
@@ -373,7 +488,10 @@ function ResultTable({ result }: { result: QueryResult }) {
     );
   }
 
-  const columns = Object.keys(result.rows[0]!);
+  const columns =
+    result.columns && result.columns.length > 0
+      ? result.columns.map((column) => column.name)
+      : Object.keys(result.rows[0] ?? {});
 
   return (
     <>
@@ -427,6 +545,12 @@ const MODE_LABELS: Record<string, string> = {
 function availableModes(pluginId: string | undefined): string[] {
   if (pluginId === 'rest') return ['api'];
   return ['raw_sql', 'stored_procedure', 'function', 'builder'];
+}
+
+export function queryNameFromTable(table: string): string {
+  const cleaned = table.replace(/[^A-Za-z0-9]+/g, '');
+  if (!cleaned) return 'Query';
+  return `Get${cleaned.charAt(0).toUpperCase()}${cleaned.slice(1)}`;
 }
 
 export function blankDefinition(mode: string): QueryEntity['definition'] {

@@ -65,6 +65,7 @@ export class MysqlPlugin implements DatasourcePlugin<MysqlConfig, QueryDefinitio
     introspection: true,
     readOnlyConnections: true,
     pagination: true,
+    schemaAdmin: false,
   };
 
   private readonly pools = new Map<string, Pool>();

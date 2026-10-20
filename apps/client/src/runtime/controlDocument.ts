@@ -31,7 +31,9 @@ export interface ControlDocument<T> {
 
 /** Id first, then widget name, so either field from the property panel works. */
 export function elementById<T>(lookup: ControlLookup<T>, id: string): T | undefined {
-  const key = String(id ?? '').trim();
+  const key = String(id ?? '')
+    .trim()
+    .replace(/^#/, '');
   if (!key) return undefined;
   return lookup.byId(key) ?? lookup.byName(key);
 }

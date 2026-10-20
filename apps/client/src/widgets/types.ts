@@ -11,7 +11,7 @@ export interface WidgetProps {
   /** Writes exposed state, making it readable as `{{ Widget.key }}`. */
   setState: (patch: Record<string, unknown>) => void;
   /** Fires a declared event; the host runs the configured actions. */
-  fireEvent: (event: string, payload?: Record<string, unknown>) => void;
+  fireEvent: (event: string, payload?: Record<string, unknown>, extraActions?: ActionDsl[]) => void;
   /** True in the editor canvas: widgets suppress side effects while being designed. */
   isDesignMode: boolean;
   /**
@@ -49,6 +49,10 @@ export interface WidgetHost {
     widgetType: string,
     seedProperties?: Record<string, unknown>,
   ) => void;
+  /**
+   * Opens the table-import dialog for a Form. Only present in the editor.
+   */
+  openFormTableImport?: (formWidgetId: string) => void;
   /**
    * Exposed state of every widget on the page. A Form reads its children's
    * values from here so `{{ Form1.data.Input1 }}` stays in lockstep with typing.

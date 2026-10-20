@@ -30,6 +30,7 @@ const FIELD_TYPES = new Set([
  */
 
 function FormWidget({
+  widget,
   properties,
   state,
   setState,
@@ -117,9 +118,25 @@ function FormWidget({
         background: String(properties.background ?? '#ffffff'),
       }}
     >
-      {properties.title ? (
-        <div className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-medium text-slate-700">
-          {String(properties.title)}
+      {properties.title || (isDesignMode && host.openFormTableImport && children.length > 0) ? (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+          <span className="truncate text-sm font-medium text-slate-700">
+            {properties.title ? String(properties.title) : ''}
+          </span>
+          {isDesignMode && host.openFormTableImport && children.length > 0 ? (
+            <button
+              type="button"
+              title="Generate fields from a database table"
+              className="no-drag shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                host.openFormTableImport?.(widget.id);
+              }}
+            >
+              Import
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -127,7 +144,10 @@ function FormWidget({
         <p className="shrink-0 px-3 pt-2 text-xs text-slate-500">{String(properties.description)}</p>
       ) : null}
 
-      <div className="relative min-h-0 flex-1" style={{ padding: spacingToCss(properties.padding, 8) }}>
+      <div
+        className={clsx('relative min-h-0 flex-1', isDesignMode && 'overflow-visible')}
+        style={{ padding: spacingToCss(properties.padding, 8) }}
+      >
         {renderChildren?.()}
       </div>
 
@@ -272,7 +292,8 @@ export const formWidget: RegisteredWidget = {
             expectedType: 'string',
             bindable: true,
             defaultValue: '',
-            helpText: 'Drop Input, Select, or any control into this form. Mark required on that control.',
+            helpText:
+              'Drop Input, Select, or any control into this form, or import columns from a table. Mark required on that control.',
           },
         ],
       },

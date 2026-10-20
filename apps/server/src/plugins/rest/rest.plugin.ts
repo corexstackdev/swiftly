@@ -117,6 +117,7 @@ export class RestPlugin implements DatasourcePlugin<RestConfig, ApiDefinition> {
     introspection: false,
     readOnlyConnections: false,
     pagination: true,
+    schemaAdmin: false,
   };
 
   private readonly logger = new Logger(RestPlugin.name);

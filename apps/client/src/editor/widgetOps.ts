@@ -1,5 +1,6 @@
 import type { PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getChromeRows, getWidgetDefinition } from '@/widgets/registry';
+import { isFixedModal } from '@/widgets/layout';
 import {
   childNeedsCellPlacement,
   gridMinRowHeight,
@@ -104,6 +105,20 @@ export function uniqueWidgetName(base: string, page: PageDsl): string {
   return candidate;
 }
 
+/**
+ * Prefer the given name when it is free — form fields imported from a table
+ * should keep the column's name so `{{ Form1.data.CustomerName }}` matches.
+ */
+export function uniqueExactName(base: string, page: PageDsl): string {
+  const cleaned = base.replace(/[^A-Za-z0-9_]/g, '') || 'Field';
+  const taken = new Set(flatten(page.widgets).map((widget) => widget.name));
+  if (!taken.has(cleaned)) return cleaned;
+  let index = 2;
+  let candidate = `${cleaned}${index}`;
+  while (taken.has(candidate)) candidate = `${cleaned}${++index}`;
+  return candidate;
+}
+
 export function uniqueName(base: string, existing: { name: string }[]): string {
   const taken = new Set(existing.map((item) => item.name));
   let index = 1;
@@ -148,6 +163,12 @@ export function requiredContainerHeight(container: WidgetDsl): number {
   const children = container.children ?? [];
   const minimum = definition?.minSize.h ?? 1;
   const chrome = getChromeRows(container.type, container.properties);
+
+  // A fixed modal keeps the size the builder set. Growing it to fit children
+  // would undo the resize and make "Fixed" mean the same as Auto.
+  if (container.type === 'modal' && isFixedModal(container.properties)) {
+    return Math.max(minimum, container.layout.h);
+  }
 
   if (definition?.childLayout === 'cells') {
     const columns = Math.max(1, Number(container.properties.columns ?? 3));

@@ -64,11 +64,19 @@ export interface JsObjectDsl {
   id?: string;
   name: string;
   code: string;
-  /** Page this object belongs to. Absent on older documents — those stay visible on every page. */
+  /**
+   * Page this object belongs to. Absent means app-level: available on every page
+   * (including older documents that were written before objects were per-page).
+   */
   pageId?: string;
 }
 
-/** Objects on a page, plus unscoped ones from before JS objects were per-page. */
+/** True when the entity is app-level rather than tied to one page. */
+export function isAppLevelEntity(entity: { pageId?: string }): boolean {
+  return !entity.pageId;
+}
+
+/** Objects visible on a page: app-level ones, plus those created on this page. */
 export function jsObjectsOnPage(
   objects: JsObjectDsl[] | undefined,
   pageId: string,
@@ -116,7 +124,18 @@ export interface ThemeDsl {
 
 export type NotificationVariant = 'info' | 'success' | 'warning' | 'error';
 
-export type ActionDsl =
+/** How Control component writes into another widget. */
+export type SetWidgetMethod = 'setValue' | 'clearValue' | 'setDisabled' | 'setProperty' | 'setOptions';
+
+/**
+ * One event handler. Several of these run, in order, when a widget event fires.
+ *
+ * `enabledWhen` is an expression (`{{ event.row.status === 'open' }}` or raw JS);
+ * a falsy result skips this handler and continues with the next.
+ */
+export type ActionDsl = {
+  enabledWhen?: string;
+} & (
   | { type: 'runQuery'; queryName: string; onSuccess?: ActionDsl[]; onError?: ActionDsl[] }
   | {
       type: 'navigate';
@@ -129,9 +148,28 @@ export type ActionDsl =
   | { type: 'closeModal'; widgetName: string }
   | { type: 'setState'; key: string; value: unknown }
   | { type: 'runJs'; code: string }
-  /** Call an exported function on a JS object, e.g. `Utils.onCityChange`. */
-  | { type: 'runJsFunction'; path: string }
-  | { type: 'download'; data: unknown; fileName: string; mimeType: string };
+  /**
+   * Call an exported function on a JS object, e.g. `dropdowns.shippingcity`.
+   * The function receives the event’s `value` (then the event). If `widgetName`
+   * is set, the return value is written onto that widget (`setOptions` by default).
+   */
+  | {
+      type: 'runJsFunction';
+      path: string;
+      widgetName?: string;
+      method?: SetWidgetMethod;
+      property?: string;
+    }
+  | { type: 'download'; data: unknown; fileName: string; mimeType: string }
+  | { type: 'copyToClipboard'; value: string }
+  | {
+      type: 'setWidget';
+      widgetName: string;
+      method: SetWidgetMethod;
+      property?: string;
+      value?: unknown;
+    }
+);
 
 export type ActionType = ActionDsl['type'];
 
@@ -160,4 +198,17 @@ export interface QueryEntity {
   /** Ask the user before running, for queries that change data. */
   confirmBeforeRun?: boolean;
   settings: QuerySettings;
+  /**
+   * Page this query belongs to. Absent means app-level: available on every page
+   * (including older documents, which were all app-level).
+   */
+  pageId?: string;
+}
+
+/** Queries visible on a page: app-level ones, plus those created on this page. */
+export function queriesOnPage(
+  queries: QueryEntity[] | undefined,
+  pageId: string,
+): QueryEntity[] {
+  return (queries ?? []).filter((query) => !query.pageId || query.pageId === pageId);
 }

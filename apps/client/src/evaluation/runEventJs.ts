@@ -46,6 +46,18 @@ const EMPTY_LOOKUP: ControlLookup<unknown> = {
   byClass: (_className: string) => [],
 };
 
+/**
+ * Select/input onChange payloads are `{ value, source }`. Callers write
+ * `shippingcity(country)`, so pass `event.value` first and the full event second.
+ * Table row events have no `value` and still receive the event object.
+ */
+export function jsFunctionCallArgs(event: unknown): unknown[] {
+  if (event !== null && typeof event === 'object' && 'value' in event) {
+    return [(event as Record<string, unknown>).value, event];
+  }
+  return [event];
+}
+
 export function runJsFunction(
   code: string,
   functionName: string,
@@ -57,7 +69,7 @@ export function runJsFunction(
   if (typeof fn !== 'function') {
     throw new Error(`Function "${functionName}" is not exported`);
   }
-  return fn.call(exports, event);
+  return (fn as (...args: unknown[]) => unknown).call(exports, ...jsFunctionCallArgs(event));
 }
 
 /** Call an already-compiled JS object method with `this` bound to the object. */
@@ -75,7 +87,7 @@ export function callJsFunction(
   if (typeof fn !== 'function') {
     throw new Error(`Function "${functionName}" is not exported`);
   }
-  return fn.call(namespace, event);
+  return (fn as (...args: unknown[]) => unknown).call(namespace, ...jsFunctionCallArgs(event));
 }
 
 export function runJsSource(code: string, scope: Record<string, unknown>, event: unknown): unknown {

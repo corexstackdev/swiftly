@@ -29,39 +29,6 @@ import { spacingToCss } from '@/editor/SpacingEditor';
 type PagingMode = 'scroll' | 'infinite' | 'client' | 'server';
 type SelectionMode = 'none' | 'single' | 'multiple';
 
-const SAMPLE_ITEMS: Record<string, unknown>[] = [
-  {
-    id: 'SKU-4417',
-    title: 'Deep groove ball bearing 6204-2RS',
-    description:
-      'Sealed on both sides, 20 × 47 × 14 mm. Standard fit for the conveyor drive units on lines 3 and 4.',
-    image: '',
-    meta: '412 in stock',
-  },
-  {
-    id: 'SKU-4418',
-    title: 'Tapered roller bearing 30206',
-    description: 'Separable, 30 × 62 × 17.25 mm. Ordered against the gearbox rebuild programme.',
-    image: '',
-    meta: '38 in stock',
-  },
-  {
-    id: 'SKU-5120',
-    title: 'Spherical roller bearing 22212 E',
-    description:
-      'Self-aligning, takes shaft deflection from the older mounts. Long lead time — check before promising a date.',
-    image: '',
-    meta: 'On order',
-  },
-  {
-    id: 'SKU-5121',
-    title: 'Needle roller cage K20×26×20',
-    description: 'For the indexing heads. Consumable — reorder point sits at 200.',
-    image: '',
-    meta: '1,204 in stock',
-  },
-];
-
 function ListWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
@@ -70,12 +37,7 @@ function ListWidget({ properties, state, setState, fireEvent, isDesignMode }: Wi
 
   /* --- data ------------------------------------------------------- */
 
-  const showingSample = properties.data === undefined && isDesignMode;
-
-  const rows = useMemo<Record<string, unknown>[]>(
-    () => (showingSample ? SAMPLE_ITEMS : asRows(properties.data)),
-    [showingSample, properties.data],
-  );
+  const rows = useMemo<Record<string, unknown>[]>(() => asRows(properties.data), [properties.data]);
 
   const pagingMode = String(properties.paging ?? 'scroll') as PagingMode;
   const pageSize = Math.max(1, Number(properties.pageSize ?? 25));
@@ -256,18 +218,8 @@ function ListWidget({ properties, state, setState, fireEvent, isDesignMode }: Wi
     <div className="flex h-full w-full flex-col overflow-hidden rounded border border-slate-200 bg-white">
       {/* --- header: title, count, search ---------------------------- */}
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-2 py-1.5">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-xs font-medium text-slate-600">
-            {String(properties.title ?? '')}
-          </span>
-          {showingSample && (
-            <span
-              title="Placeholder items so the list can be styled. They disappear once List data is bound, and never appear in preview or a published app."
-              className="shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold tracking-wide text-amber-700 uppercase"
-            >
-              Sample
-            </span>
-          )}
+        <span className="min-w-0 truncate text-xs font-medium text-slate-600">
+          {String(properties.title ?? '')}
         </span>
 
         <span className="ml-auto shrink-0 text-xs tabular-nums text-slate-400">

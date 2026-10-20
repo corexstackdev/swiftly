@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import clsx from 'clsx';
 import type { TabDisplayMode } from '@swiftly/shared';
@@ -30,6 +30,13 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
 
   const options = useMemo<ChoiceOption[]>(() => normaliseChoiceOptions(properties), [properties]);
   const dataError = choiceSourceError(properties);
+
+  useEffect(() => {
+    if (state.value === undefined || state.value === null || state.value === '') return;
+    if (options.length === 0) return;
+    if (options.some((option) => option.value === state.value)) return;
+    setState({ value: undefined, selectedLabel: undefined });
+  }, [options, setState, state.value]);
 
   const filtered = useMemo(() => {
     if (!search) return options;

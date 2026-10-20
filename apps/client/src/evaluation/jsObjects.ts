@@ -42,29 +42,42 @@ export function isJsObjectStub(value: unknown): value is JsObjectStub {
   );
 }
 
-const cache = new Map<string, { code: string; exports: Record<string, unknown> }>();
+const cache = new Map<string, { code: string; exports: Record<string, unknown>; error?: string }>();
+
+export interface JsObjectInspection {
+  exports: Record<string, unknown>;
+  error?: string;
+}
 
 /**
  * Compiles a JS object's source into a callable namespace. Failures become an
- * empty object so one broken helper cannot blank the page — the error surfaces
- * on the binding that tried to call it.
+ * empty object so one broken helper cannot blank the page. The picker and JS
+ * panel read `error` so a syntax mistake is visible instead of an empty list.
  *
- * Used by the function picker; evaluation goes through `hydrateJsObjects` so it
- * can resolve `document.getElementById` against the page.
+ * Evaluation goes through `hydrateJsObjects` so it can resolve
+ * `document.getElementById` against the page.
  */
-export function loadJsObject(name: string, code: string): Record<string, unknown> {
+export function inspectJsObject(name: string, code: string): JsObjectInspection {
   const cached = cache.get(name);
-  if (cached && cached.code === code) return cached.exports;
-
-  let exports: Record<string, unknown> = {};
-  try {
-    exports = compileJsObject(code, {});
-  } catch {
-    exports = {};
+  if (cached && cached.code === code) {
+    return { exports: cached.exports, error: cached.error };
   }
 
-  cache.set(name, { code, exports });
-  return exports;
+  let exports: Record<string, unknown> = {};
+  let error: string | undefined;
+  try {
+    exports = compileJsObject(code, {});
+  } catch (caught) {
+    exports = {};
+    error = caught instanceof Error ? caught.message : String(caught);
+  }
+
+  cache.set(name, { code, exports, error });
+  return { exports, error };
+}
+
+export function loadJsObject(name: string, code: string): Record<string, unknown> {
+  return inspectJsObject(name, code).exports;
 }
 
 /** Replaces serialisable stubs with compiled namespaces. Does not mutate `tree`. */

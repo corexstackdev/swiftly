@@ -7,12 +7,13 @@ import {
   RequestTimeoutException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type {
-  ApplicationDsl,
-  EvaluatedBindings,
-  ExecutionContext as PluginExecutionContext,
-  QueryEntity,
-  QueryResult,
+import {
+  queriesOnPage,
+  type ApplicationDsl,
+  type EvaluatedBindings,
+  type ExecutionContext as PluginExecutionContext,
+  type QueryEntity,
+  type QueryResult,
 } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PluginRegistry } from '../plugins/plugin.registry';
@@ -23,12 +24,20 @@ import { PERMISSIONS, type Permission } from '../common/permissions';
 
 export interface ExecuteQueryInput {
   organizationId: string;
-  userId: string;
+  /** Absent when a published app is running without a Swiftly session. */
+  userId?: string;
   permissions: Permission[];
   applicationId: string;
   queryName: string;
+  /** Current page, used when two pages each have a query of this name. */
+  pageId?: string;
   /** Draft is the editor and preview; published is what end users run. */
   source: 'draft' | 'published';
+  /**
+   * Public hosted URLs (published and preview) run the stored DSL without a
+   * Swiftly session, so `query:write` is not required.
+   */
+  publicRuntime?: boolean;
   environmentId: string;
   /**
    * Evaluated binding values, keyed by the expression text. The client evaluates
@@ -52,11 +61,16 @@ export class QueriesService {
   ) {}
 
   async execute(input: ExecuteQueryInput): Promise<QueryResult> {
-    const dsl = await this.loadDsl(input.organizationId, input.applicationId, input.source);
+    const dsl = await this.loadDsl(
+      input.organizationId,
+      input.applicationId,
+      input.source,
+      input.environmentId,
+    );
 
     // The statement always comes from the stored DSL. The request supplies values
     // only — it can never supply SQL, a datasource id, or a target host.
-    const query = dsl.queries.find((q) => q.name === input.queryName);
+    const query = resolveQuery(dsl, input.queryName, input.pageId);
     if (!query) {
       throw new NotFoundException(`Query "${input.queryName}" not found in this application`);
     }
@@ -69,7 +83,13 @@ export class QueriesService {
     const plugin = this.registry.get(resolved.pluginId);
     const prepared = plugin.prepare(query.definition as never);
 
-    this.assertWriteAllowed(prepared.statementType, resolved.readOnly, input.permissions, query);
+    this.assertWriteAllowed(
+      prepared.statementType,
+      resolved.readOnly,
+      input.permissions,
+      query,
+      input.publicRuntime === true,
+    );
 
     const bindings = this.collectBindings(prepared.expressions, prepared.identifierExpressions, input.bindings);
 
@@ -102,7 +122,7 @@ export class QueriesService {
     const ctx: PluginExecutionContext = {
       datasourceId: query.datasourceId,
       organizationId: input.organizationId,
-      userId: input.userId,
+      userId: input.userId ?? '',
       environment: input.environmentId,
       timeoutMs,
       maxRows,
@@ -110,7 +130,7 @@ export class QueriesService {
       // real safety net: an accidental write fails at the database, not in our parser.
       readOnly: resolved.readOnly || prepared.statementType === 'read',
       sessionVariables: {
-        'app.user_id': input.userId,
+        'app.user_id': input.userId ?? '',
         'app.organization_id': input.organizationId,
       },
       signal: controller.signal,
@@ -215,6 +235,16 @@ export class QueriesService {
         },
         signal: controller.signal,
       });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new RequestTimeoutException(`Query exceeded its ${timeoutMs}ms timeout`);
+      }
+      this.logger.warn(
+        `Draft query failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Query execution failed',
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -225,6 +255,7 @@ export class QueriesService {
     datasourceReadOnly: boolean,
     permissions: Permission[],
     query: QueryEntity,
+    publicRuntime: boolean,
   ): void {
     if (statementType === 'read') return;
 
@@ -233,15 +264,16 @@ export class QueriesService {
         `Query "${query.name}" modifies data, but its datasource is read-only`,
       );
     }
-    if (!permissions.includes(PERMISSIONS.QUERY_WRITE)) {
-      throw new ForbiddenException(
-        `Query "${query.name}" modifies data and requires the query:write permission`,
-      );
-    }
     if (statementType === 'ddl' && !permissions.includes(PERMISSIONS.QUERY_RAW_UNSAFE)) {
       throw new ForbiddenException(
         `Query "${query.name}" contains a schema-changing statement, which requires ` +
           'the query:raw_unsafe permission',
+      );
+    }
+    if (publicRuntime) return;
+    if (!permissions.includes(PERMISSIONS.QUERY_WRITE)) {
+      throw new ForbiddenException(
+        `Query "${query.name}" modifies data and requires the query:write permission`,
       );
     }
   }
@@ -276,18 +308,25 @@ export class QueriesService {
     organizationId: string,
     applicationId: string,
     source: 'draft' | 'published',
+    environmentId: string,
   ): Promise<ApplicationDsl> {
     const application = await this.prisma.application.findFirst({
       where: { id: applicationId, workspace: { organizationId } },
-      include: { publishedVersion: true },
+      include: {
+        publishedVersion: true,
+        releases: { include: { version: true } },
+      },
     });
     if (!application) throw new NotFoundException('Application not found');
 
     if (source === 'published') {
-      if (!application.publishedVersion) {
-        throw new NotFoundException('This application has not been published');
+      const release = application.releases.find(
+        (entry) => entry.environmentId === environmentId,
+      );
+      if (!release) {
+        throw new NotFoundException('This application has not been published to this environment');
       }
-      return application.publishedVersion.dsl as unknown as ApplicationDsl;
+      return release.version.dsl as unknown as ApplicationDsl;
     }
     return application.draftDsl as unknown as ApplicationDsl;
   }
@@ -295,4 +334,18 @@ export class QueriesService {
 
 function normalise(expression: string): string {
   return expression.trim().replace(/\s+/g, ' ');
+}
+
+function resolveQuery(
+  dsl: ApplicationDsl,
+  queryName: string,
+  pageId?: string,
+): QueryEntity | undefined {
+  if (pageId) {
+    return queriesOnPage(dsl.queries, pageId).find((query) => query.name === queryName);
+  }
+  return (
+    dsl.queries.find((query) => query.name === queryName && !query.pageId) ??
+    dsl.queries.find((query) => query.name === queryName)
+  );
 }

@@ -231,6 +231,7 @@ model Application {
   createdBy        User                 @relation("AppCreatedBy", fields: [createdById], references: [id])
   versions         ApplicationVersion[] @relation("AppVersions")
   publishedVersion ApplicationVersion?  @relation("AppPublishedVersion", fields: [publishedVersionId], references: [id])
+  releases         ApplicationRelease[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId])
@@ -259,10 +260,29 @@ model ApplicationVersion {
   submittedBy      User         @relation("VersionSubmittedBy", fields: [submittedById], references: [id])
   reviewedBy       User?        @relation("VersionReviewedBy", fields: [reviewedById], references: [id])
   publishedForApp  Application? @relation("AppPublishedVersion")
+  releases         ApplicationRelease[]
 
   @@unique([applicationId, versionNumber])
   @@index([applicationId, status])
   @@map("application_versions")
+}
+
+/// One published snapshot per environment. Dev, test, stage and production can
+/// each point at a different version of the same application.
+model ApplicationRelease {
+  id            String   @id @default(uuid())
+  applicationId String
+  environmentId String
+  versionId     String
+  publishedAt   DateTime @default(now())
+
+  application Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  environment Environment        @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+  version     ApplicationVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, environmentId])
+  @@index([environmentId])
+  @@map("application_releases")
 }
 
 /* ------------------------------------------------------------------ *
@@ -272,14 +292,15 @@ model ApplicationVersion {
 model Environment {
   id             String  @id @default(uuid())
   organizationId String
-  /// 'dev', 'staging', 'prod'.
+  /// 'dev', 'test', 'stage', 'production'.
   name           String
   isDefault      Boolean @default(false)
-  /// Publishing to this environment requires the 'app:publish' permission.
+  /// The public URL without an environment query uses this environment's release.
   isProduction   Boolean @default(false)
 
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   configs      DatasourceConfig[]
+  releases     ApplicationRelease[]
 
   @@unique([organizationId, name])
   @@map("environments")

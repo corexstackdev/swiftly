@@ -1,12 +1,13 @@
 import {
   jsObjectsOnPage,
+  queriesOnPage,
   type ActionDsl,
   type ApplicationDsl,
   type JsObjectDsl,
   type WidgetDsl,
 } from '@swiftly/shared';
 import { isBinding, parseBinding } from '@/evaluation/parser';
-import { loadJsObject } from '@/evaluation/jsObjects';
+import { inspectJsObject, loadJsObject } from '@/evaluation/jsObjects';
 import { flatten } from './widgetOps';
 
 export interface JsBindingRef {
@@ -27,23 +28,55 @@ export function nextAvailableName(name: string, taken: Set<string>): string {
   return `${name}${index}`;
 }
 
+export interface TakenNameExcept {
+  jsId?: string;
+  queryId?: string;
+}
+
 /** Names that would collide in the evaluation tree on a given page. */
 export function takenJsNames(
   dsl: ApplicationDsl,
   pageId: string,
-  exceptId?: string,
+  exceptId?: string | TakenNameExcept,
 ): Set<string> {
+  const except = typeof exceptId === 'string' ? { jsId: exceptId } : (exceptId ?? {});
   const taken = new Set<string>(RESERVED);
-  for (const query of dsl.queries) taken.add(query.name);
+  for (const query of queriesOnPage(dsl.queries, pageId)) {
+    if (query.id === except.queryId) continue;
+    taken.add(query.name);
+  }
   const page = dsl.pages.find((candidate) => candidate.id === pageId);
   if (page) {
     for (const widget of flatten(page.widgets)) taken.add(widget.name);
   }
   for (const object of jsObjectsOnPage(dsl.jsObjects, pageId)) {
-    if (object.id && object.id === exceptId) continue;
+    if (object.id && object.id === except.jsId) continue;
     taken.add(object.name);
   }
   return taken;
+}
+
+/**
+ * Names an app-level query or JS object cannot use: the union of every page's
+ * tree, because a global name is visible everywhere.
+ */
+export function takenAppLevelNames(dsl: ApplicationDsl, except?: TakenNameExcept): Set<string> {
+  const taken = new Set<string>(RESERVED);
+  for (const page of dsl.pages) {
+    for (const name of takenJsNames(dsl, page.id, except)) taken.add(name);
+  }
+  if (dsl.pages.length === 0) {
+    for (const name of takenJsNames(dsl, '', except)) taken.add(name);
+  }
+  return taken;
+}
+
+export function takenNamesForEntity(
+  dsl: ApplicationDsl,
+  pageId: string | undefined,
+  except?: TakenNameExcept,
+): Set<string> {
+  return pageId ? takenJsNames(dsl, pageId, except) : takenAppLevelNames(dsl, except);
 }
 
 export function copyJsName(name: string, taken: Set<string>): string {
@@ -118,6 +151,7 @@ function collectActions(
 ): void {
   if (!actions) return;
   for (const action of actions) {
+    collectValue(action.enabledWhen, `${location} · only run when`, matches, refs);
     switch (action.type) {
       case 'showNotification':
         collectValue(action.message, `${location} · notification`, matches, refs);
@@ -134,6 +168,13 @@ function collectActions(
       case 'download':
         collectValue(action.data, `${location} · download`, matches, refs);
         collectValue(action.fileName, `${location} · file name`, matches, refs);
+        break;
+      case 'copyToClipboard':
+        collectValue(action.value, `${location} · clipboard`, matches, refs);
+        break;
+      case 'setWidget':
+        collectValue(action.widgetName, `${location} · component`, matches, refs);
+        collectValue(action.value, `${location} · set widget`, matches, refs);
         break;
       case 'runQuery':
         collectActions(action.onSuccess, `${location} · on success`, matches, refs);
@@ -196,6 +237,18 @@ export function listJsFunctions(objects: JsObjectDsl[] | undefined): JsFunctionO
     }
   }
   return listed.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** JS objects that failed to compile — their functions never reach the picker. */
+export function jsObjectCompileErrors(
+  objects: JsObjectDsl[] | undefined,
+): { name: string; error: string }[] {
+  const listed: { name: string; error: string }[] = [];
+  for (const object of objects ?? []) {
+    const error = inspectJsObject(object.name, object.code).error;
+    if (error) listed.push({ name: object.name, error });
+  }
+  return listed;
 }
 
 export function jsCallBinding(path: string): string {

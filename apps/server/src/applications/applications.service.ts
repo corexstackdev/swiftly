@@ -12,7 +12,7 @@ export class ApplicationsService {
   ) {}
 
   async list(organizationId: string, workspaceId?: string) {
-    return this.prisma.application.findMany({
+    const applications = await this.prisma.application.findMany({
       where: {
         workspace: { organizationId },
         ...(workspaceId ? { workspaceId } : {}),
@@ -28,9 +28,22 @@ export class ApplicationsService {
         workspaceId: true,
         publishedVersionId: true,
         createdBy: { select: { id: true, name: true } },
+        releases: {
+          select: {
+            environmentId: true,
+            publishedAt: true,
+            environment: { select: { name: true, isProduction: true } },
+            version: { select: { versionNumber: true } },
+          },
+        },
       },
       orderBy: { updatedAt: 'desc' },
     });
+
+    return applications.map(({ releases, ...application }) => ({
+      ...application,
+      releases: presentReleases(releases),
+    }));
   }
 
   async get(organizationId: string, applicationId: string) {
@@ -38,10 +51,20 @@ export class ApplicationsService {
       where: { id: applicationId, workspace: { organizationId } },
       include: {
         publishedVersion: { select: { id: true, versionNumber: true, publishedAt: true } },
+        workspace: { select: { slug: true } },
+        releases: {
+          select: {
+            environmentId: true,
+            publishedAt: true,
+            environment: { select: { name: true, isProduction: true } },
+            version: { select: { versionNumber: true } },
+          },
+        },
       },
     });
     if (!application) throw new NotFoundException('Application not found');
-    return application;
+    const { releases, ...rest } = application;
+    return { ...rest, releases: presentReleases(releases) };
   }
 
   async create(
@@ -182,4 +205,36 @@ export function emptyDsl(name: string): ApplicationDsl {
     },
     appState: {},
   };
+}
+
+const ENV_ORDER: Record<string, number> = {
+  dev: 0,
+  test: 1,
+  stage: 2,
+  staging: 2,
+  production: 3,
+  prod: 3,
+};
+
+function presentReleases(
+  releases: {
+    environmentId: string;
+    publishedAt: Date;
+    environment: { name: string; isProduction: boolean };
+    version: { versionNumber: number };
+  }[],
+) {
+  return [...releases]
+    .map((release) => ({
+      environmentId: release.environmentId,
+      environmentName: release.environment.name,
+      isProduction: release.environment.isProduction,
+      versionNumber: release.version.versionNumber,
+      publishedAt: release.publishedAt,
+    }))
+    .sort(
+      (left, right) =>
+        (ENV_ORDER[left.environmentName] ?? 50) - (ENV_ORDER[right.environmentName] ?? 50) ||
+        left.environmentName.localeCompare(right.environmentName),
+    );
 }
