@@ -211,6 +211,7 @@ function TypeGlyph({ type, isContainer }: { type: string; isContainer: boolean }
         <path d="M4.5 5h5M7 5v5" stroke="currentColor" strokeWidth="1.2" fill="none" />
       )}
       {type === 'button' && <rect x="3.5" y="5" width="7" height="4" rx="1" fill="currentColor" />}
+      {type === 'nav_link' && <path d="M4 7h6M4 10h4" stroke="currentColor" strokeWidth="1.2" />}
       {type === 'input' && <path d="M3.5 7h4" stroke="currentColor" strokeWidth="1.2" />}
       {type === 'select' && (
         <path d="M5 6l2 2 2-2" stroke="currentColor" strokeWidth="1.2" fill="none" />

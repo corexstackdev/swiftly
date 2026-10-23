@@ -766,6 +766,18 @@ function Control({
         </Select>
       );
 
+    case 'page_picker':
+      return (
+        <Select value={String(value ?? '')} onChange={onChange}>
+          <option value="">None</option>
+          {dsl.pages.map((page) => (
+            <option key={page.id} value={page.id}>
+              {page.name}
+            </option>
+          ))}
+        </Select>
+      );
+
     case 'js_function':
       return (
         <JsFunctionPicker

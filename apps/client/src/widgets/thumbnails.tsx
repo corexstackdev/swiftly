@@ -95,6 +95,35 @@ export const THUMBNAILS: Record<string, React.ReactNode> = {
     </Bare>
   ),
 
+  navbar: (
+    <Bare>
+      <rect x="1" y="4" width="42" height="10" rx="2" stroke={ACCENT} strokeWidth="1.4" strokeDasharray="3 2.5" />
+      <rect x="4" y="6.5" width="8" height="5" rx="1" fill={ACCENT} />
+      {bar(16, 8, 6, 2.5)}
+      {bar(24, 8, 6, 2.5)}
+      {bar(32, 8, 7, 2.5, ACCENT)}
+      {bar(4, 20, 18)}
+      {bar(4, 25, 12)}
+    </Bare>
+  ),
+
+  nav_link: (
+    <Bare>
+      {bar(8, 13, 18, 4, ACCENT)}
+      <path d="M30 11v8M28 11h4M28 19h4" stroke={ACCENT} strokeWidth="1.2" strokeLinecap="round" />
+    </Bare>
+  ),
+
+  nav_menu: (
+    <Bare>
+      {bar(8, 6, 16, 4, ACCENT)}
+      <path d="M27 7.5l3 3 3-3" stroke={ACCENT} strokeWidth="1.3" strokeLinecap="round" />
+      <rect x="10" y="13" width="24" height="14" rx="2" stroke={ACCENT} strokeWidth="1.3" />
+      {bar(14, 16, 16, 2.5)}
+      {bar(14, 21, 12, 2.5)}
+    </Bare>
+  ),
+
   /* ---- inputs ---- */
   input: (
     <Frame>

@@ -170,6 +170,12 @@ export function requiredContainerHeight(container: WidgetDsl): number {
     return Math.max(minimum, container.layout.h);
   }
 
+  // A navbar or menu lays children in document order; growing to nested
+  // coordinate boxes would stretch the bar around a dropdown that overlays it.
+  if (definition?.childLayout === 'flow') {
+    return Math.max(minimum, container.layout.h);
+  }
+
   if (definition?.childLayout === 'cells') {
     const columns = Math.max(1, Number(container.properties.columns ?? 3));
     const minRowHeight = gridMinRowHeight(container.properties);
@@ -215,6 +221,11 @@ export function fitAllContainers(page: PageDsl): void {
     }
   };
   walk(page.widgets);
+}
+
+/** Containers that place children themselves instead of a nested coordinate grid. */
+export function placesOwnChildren(layout: string | undefined): boolean {
+  return layout === 'cells' || layout === 'flow';
 }
 
 /** Whether any container is currently too short for its contents. */

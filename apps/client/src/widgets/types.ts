@@ -60,6 +60,10 @@ export interface WidgetHost {
   widgetState?: Record<string, Record<string, unknown>>;
   setWidgetState?: (widgetName: string, patch: Record<string, unknown>) => void;
   propertiesOf?: (widgetName: string) => Record<string, unknown>;
+  /** The page currently showing, so a Link can mark itself active. */
+  currentPageId?: string;
+  navigateToPage?: (pageId: string, params?: Record<string, string>) => void;
+  openUrl?: (href: string, newTab?: boolean) => void;
 }
 
 export interface RegisteredWidget {

@@ -24,6 +24,7 @@ export type PropertyControl =
   | 'column_config'
   | 'tab_list'
   | 'query_picker'
+  | 'page_picker'
   | 'js_function'
   | 'json';
 
@@ -75,10 +76,10 @@ export interface WidgetDefinition {
   icon: string;
   isContainer?: boolean;
   /**
-   * How a container places its children: on the free coordinate grid, or in cells
-   * it lays out itself.
+   * How a container places its children: on the free coordinate grid, in cells
+   * it lays out itself, or in document order (a navbar row, a menu).
    */
-  childLayout?: 'grid' | 'cells';
+  childLayout?: 'grid' | 'cells' | 'flow';
   defaultLayout: WidgetLayout;
   minSize: { w: number; h: number };
   events: WidgetEventDefinition[];

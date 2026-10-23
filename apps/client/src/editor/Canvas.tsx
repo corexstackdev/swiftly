@@ -3,7 +3,7 @@ import GridLayout, { type Layout } from 'react-grid-layout';
 import clsx from 'clsx';
 import type { ActionDsl, PageDsl, WidgetDsl } from '@swiftly/shared';
 import { getWidget, getWidgetDefinition } from '@/widgets/registry';
-import { requiredContainerHeight } from './widgetOps';
+import { placesOwnChildren, requiredContainerHeight } from './widgetOps';
 import { GRID_COLUMNS, GRID_ROW_HEIGHT, GRID_GAP, runtimeHost } from '@/runtime/PageRenderer';
 import { GridChildResizer } from './GridChildResizer';
 import { acceptPaletteDrag, dropParentId, takePaletteDrop } from './paletteDrag';
@@ -368,6 +368,7 @@ function CanvasGrid({
             handlers.selectedWidgetId === widget.id
               ? 'is-selected outline-2 outline-blue-500'
               : 'hover:outline hover:outline-1 hover:outline-blue-300',
+            (widget.type === 'navbar' || widget.type === 'nav_menu') && 'z-[5] overflow-visible',
             String(runtime.properties(widget.name).className ?? ''),
           )}
         >
@@ -462,7 +463,9 @@ function DesignWidget({
    * one renderer per child instead of a nested coordinate grid. Selection and the
    * name badge still come from here — what changes is who decides the position.
    */
-  if (registered.definition.childLayout === 'cells') {
+  if (placesOwnChildren(registered.definition.childLayout)) {
+    const resizeCells = registered.definition.childLayout === 'cells';
+    const fitContent = widget.type === 'navbar';
     return (
       <div
         className="nested-canvas h-full w-full overflow-visible"
@@ -490,6 +493,8 @@ function DesignWidget({
               handlers={handlers}
               depth={depth}
               fitVersion={fitVersion}
+              resizeCells={resizeCells}
+              fitContent={fitContent}
             />
           )}
         />
@@ -557,14 +562,28 @@ function DesignChild({
   handlers,
   depth,
   fitVersion,
+  resizeCells = true,
+  fitContent = false,
 }: {
   child: WidgetDsl;
   runtime: AppRuntime;
   handlers: CanvasHandlers;
   depth: number;
   fitVersion: number;
+  resizeCells?: boolean;
+  fitContent?: boolean;
 }) {
   const isSelected = handlers.selectedWidgetId === child.id;
+
+  const body = (
+    <DesignWidget
+      widget={child}
+      runtime={runtime}
+      handlers={handlers}
+      depth={depth + 1}
+      fitVersion={fitVersion}
+    />
+  );
 
   return (
     <div
@@ -576,7 +595,8 @@ function DesignChild({
         handlers.onSelect(child.id);
       }}
       className={clsx(
-        'group/cell group relative h-full w-full rounded outline-offset-2',
+        'group/cell group relative rounded outline-offset-2',
+        fitContent ? 'h-full w-max' : 'h-full w-full',
         isSelected
           ? 'is-selected outline-2 outline-blue-500'
           : 'hover:outline hover:outline-1 hover:outline-blue-300',
@@ -591,19 +611,17 @@ function DesignChild({
       {isSelected && (
         <WidgetDeleteButton name={child.name} onDelete={() => handlers.onDelete(child.id)} />
       )}
-      <GridChildResizer
-        child={child}
-        selected={isSelected}
-        onCommit={(patch) => handlers.onUpdateProperties(child.id, { ...patch })}
-      >
-        <DesignWidget
-          widget={child}
-          runtime={runtime}
-          handlers={handlers}
-          depth={depth + 1}
-          fitVersion={fitVersion}
-        />
-      </GridChildResizer>
+      {resizeCells ? (
+        <GridChildResizer
+          child={child}
+          selected={isSelected}
+          onCommit={(patch) => handlers.onUpdateProperties(child.id, { ...patch })}
+        >
+          {body}
+        </GridChildResizer>
+      ) : (
+        <div className={fitContent ? 'h-full w-max' : 'h-full w-full'}>{body}</div>
+      )}
     </div>
   );
 }

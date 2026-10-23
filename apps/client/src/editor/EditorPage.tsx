@@ -41,6 +41,7 @@ import {
   fitAllContainers,
   needsContainerFit,
   newWidgetId,
+  placesOwnChildren,
   removeWidget,
   uniqueExactName,
   uniqueName,
@@ -1159,7 +1160,7 @@ function EditorBody({
                   : undefined;
                 const selectedDef = selected ? getWidgetDefinition(selected.type) : undefined;
                 if (selected && selectedDef?.isContainer) {
-                  if (selectedDef.childLayout === 'cells') {
+                  if (placesOwnChildren(selectedDef.childLayout)) {
                     addWidgetToContainer(selected.id, type);
                     return;
                   }

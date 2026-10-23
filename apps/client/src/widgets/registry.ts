@@ -10,6 +10,7 @@ import { selectWidget } from './SelectWidget';
 import { chartWidget } from './ChartWidget';
 import { modalWidget, tabsWidget } from './layout';
 import { gridWidget } from './GridWidget';
+import { navbarWidget, navLinkWidget, navMenuWidget } from './NavbarWidget';
 import {
   checkboxGroupWidget,
   checkboxWidget,
@@ -45,6 +46,9 @@ register(containerWidget);
 register(gridWidget);
 register(tabsWidget);
 register(modalWidget);
+register(navbarWidget);
+register(navMenuWidget);
+register(navLinkWidget);
 register(dividerWidget);
 
 // Inputs

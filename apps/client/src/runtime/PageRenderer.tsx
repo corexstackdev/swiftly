@@ -20,6 +20,13 @@ export function runtimeHost(runtime: AppRuntime) {
     widgetState: runtime.widgetState,
     setWidgetState: runtime.setWidgetState,
     propertiesOf: runtime.properties,
+    currentPageId: runtime.currentPageId,
+    navigateToPage: runtime.navigateToPage,
+    openUrl: (href: string, newTab?: boolean) => {
+      if (typeof window === 'undefined') return;
+      if (newTab) window.open(href, '_blank', 'noopener,noreferrer');
+      else window.location.assign(href);
+    },
   };
 }
 
@@ -57,7 +64,10 @@ export function PageRenderer({
             gridColumn: `${widget.layout.x + 1} / span ${widget.layout.w}`,
             gridRow: `${widget.layout.y + 1} / span ${widget.layout.h}`,
           }}
-          className="min-w-0"
+          className={clsx(
+            'min-w-0',
+            (widget.type === 'navbar' || widget.type === 'nav_menu') && 'z-[5] overflow-visible',
+          )}
         >
           <WidgetHost widget={widget} runtime={runtime} isDesignMode={isDesignMode} />
         </div>
