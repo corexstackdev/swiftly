@@ -1,8 +1,25 @@
-import { useEffect, useState } from 'react';
-import type { ApplicationDsl, DbSchema, PageDsl, QueryEntity, QueryResult } from '@swiftly/shared';
+import { useEffect, useRef, useState } from 'react';
+import clsx from 'clsx';
+import {
+  isAppLevelEntity,
+  type ApplicationDsl,
+  type DbSchema,
+  type PageDsl,
+  type QueryEntity,
+  type QueryResult,
+  type QueryVariable,
+  type RoutineMetadata,
+} from '@swiftly/shared';
 import { api, type DatasourceSummary } from '@/lib/api';
+import {
+  isQueryVariableName,
+  nextVariableName,
+  pageQueryVariableOverrides,
+  setPageQueryVariableValue,
+} from '@/evaluation/queryVariables';
 import { QueryMenuButton } from './QueryMenu';
 import { isJsIdentifier } from './jsObjectOps';
+import { controlCompact, ghostButton } from './controls';
 
 /**
  * The query editor.
@@ -32,6 +49,7 @@ export function QueryPanel({
   onMakeGlobal,
   onCopyToThisPage,
   onDelete,
+  onPageChange,
 }: {
   /** The query being edited, chosen in the entity panel. */
   query: QueryEntity | null;
@@ -53,6 +71,7 @@ export function QueryPanel({
   onMakeGlobal: () => void;
   onCopyToThisPage: () => void;
   onDelete: () => void;
+  onPageChange: (mutate: (page: PageDsl) => void, label?: string) => void;
 }) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +80,7 @@ export function QueryPanel({
   const [draftName, setDraftName] = useState(query?.name ?? '');
 
   const datasource = datasources.find((candidate) => candidate.id === query?.datasourceId);
+  const page = pages.find((candidate) => candidate.id === currentPageId);
 
   useEffect(() => {
     setResult(null);
@@ -195,11 +215,11 @@ export function QueryPanel({
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col border-r border-slate-200">
+        <div className="flex min-h-0 min-w-0 flex-[1.4] flex-col overflow-hidden border-r border-slate-200">
           <QueryEditorBody query={query} schema={schema} onChange={onChange} />
         </div>
 
-        <div className="flex w-1/2 min-w-0 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="border-b border-slate-200 px-2 py-1 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
             Result
           </div>
@@ -216,6 +236,14 @@ export function QueryPanel({
           </div>
         </div>
       </div>
+
+      <QueryVariablesEditor
+        query={query}
+        page={page}
+        bindings={bindings}
+        onChange={onChange}
+        onPageChange={onPageChange}
+      />
     </div>
   );
 }
@@ -233,11 +261,13 @@ function QueryEditorBody({
   onChange: (mutate: (query: QueryEntity) => void) => void;
 }) {
   const definition = query.definition as unknown as Record<string, unknown>;
+  const sqlRef = useRef<HTMLTextAreaElement>(null);
 
   if (definition.kind === 'raw_sql') {
     return (
-      <>
+      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto">
         <textarea
+          ref={sqlRef}
           value={String(definition.sql ?? '')}
           onChange={(event) =>
             onChange((draft) => {
@@ -245,11 +275,28 @@ function QueryEditorBody({
             })
           }
           spellCheck={false}
-          placeholder="SELECT * FROM orders WHERE region = {{ RegionSelect.value }}"
-          className="min-h-0 flex-1 resize-none p-3 font-mono text-xs outline-none"
+          placeholder="SELECT * FROM orders WHERE region = {{ region }}"
+          className="min-h-24 min-w-0 flex-1 resize-none p-2 font-mono text-xs outline-none"
         />
-        {schema && <SchemaHint schema={schema} />}
-      </>
+        {schema && (
+          <SchemaBrowser
+            schema={schema}
+            onInsert={(snippet, variables) =>
+              onChange((draft) => {
+                const target = draft.definition as unknown as Record<string, unknown>;
+                target.sql = insertSqlSnippet(
+                  String(target.sql ?? ''),
+                  snippet,
+                  sqlRef.current,
+                );
+                if (variables && variables.length > 0) {
+                  draft.variables = mergeVariables(draft.variables, variables);
+                }
+              })
+            }
+          />
+        )}
+      </div>
     );
   }
 
@@ -263,71 +310,123 @@ function QueryEditorBody({
       ) ?? [];
 
     const selectedName = String(definition[isProcedure ? 'procedureName' : 'functionName'] ?? '');
-    const selected = routines.find((routine) => routine.name === selectedName);
+    const selectedSchema = String(definition.schema ?? '');
+    const selectedKey = selectedName
+      ? selectedSchema
+        ? `${selectedSchema}.${selectedName}`
+        : selectedName
+      : '';
+    const selected =
+      routines.find((routine) => `${routine.schema}.${routine.name}` === selectedKey) ??
+      routines.find((routine) => routine.name === selectedName);
 
     return (
-      <div className="flex flex-col gap-3 p-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-slate-600">
-            {isProcedure ? 'Procedure' : 'Function'}
-          </span>
-          <select
-            value={selectedName}
-            onChange={(event) => {
-              const routine = routines.find((candidate) => candidate.name === event.target.value);
-              onChange((draft) => {
-                const target = draft.definition as unknown as Record<string, unknown>;
-                target[isProcedure ? 'procedureName' : 'functionName'] = event.target.value;
-                target.schema = routine?.schema;
-                // The argument list is generated from the real signature, so the
-                // form cannot drift from what the database expects.
-                target.arguments = (routine?.parameters ?? []).map((parameter) => ({
-                  name: parameter.name,
-                  direction: parameter.direction,
-                  typeHint: parameter.dataType,
-                  value: parameter.direction === 'out' ? undefined : '',
-                }));
-              });
-            }}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
-          >
-            <option value="">Select…</option>
-            {routines.map((routine) => (
-              <option key={`${routine.schema}.${routine.name}`} value={routine.name}>
-                {routine.schema}.{routine.name}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-slate-600">
+              {isProcedure ? 'Procedure' : 'Function'}
+            </span>
+            <select
+              value={selected ? `${selected.schema}.${selected.name}` : selectedKey}
+              onChange={(event) => {
+                const routine = routines.find(
+                  (candidate) => `${candidate.schema}.${candidate.name}` === event.target.value,
+                );
+                onChange((draft) => {
+                  const target = draft.definition as unknown as Record<string, unknown>;
+                  target[isProcedure ? 'procedureName' : 'functionName'] = routine?.name ?? '';
+                  target.schema = routine?.schema;
+                  if (!isProcedure) target.tableValued = routine?.returnsSet === true;
+                  const inputs = routine ? inParameters(routine) : [];
+                  const names = uniqueVarNames(inputs.map((parameter) => safeVarName(parameter.name)));
+                  const listed = (routine?.parameters ?? []).filter(
+                    (parameter) => isProcedure || parameter.direction !== 'out',
+                  );
+                  let inputIndex = 0;
+                  target.arguments = listed.map((parameter) => {
+                    const isOut = parameter.direction === 'out';
+                    const varName = isOut ? '' : names[inputIndex++]!;
+                    return {
+                      name: parameter.name || varName || 'arg',
+                      direction: parameter.direction,
+                      typeHint: parameter.dataType,
+                      value: isOut ? undefined : `{{ ${varName} }}`,
+                    };
+                  });
+                  if (names.length > 0) {
+                    draft.variables = mergeVariables(
+                      draft.variables,
+                      names.map((name) => ({ name, value: '' })),
+                    );
+                  }
+                });
+              }}
+              className="rounded border border-slate-300 px-2 py-1 text-sm"
+            >
+              <option value="">{schema ? 'Select…' : 'Schema loading…'}</option>
+              {routines.map((routine) => (
+                <option
+                  key={`${routine.schema}.${routine.name}`}
+                  value={`${routine.schema}.${routine.name}`}
+                >
+                  {routine.schema}.{routine.name}
+                  {routine.returnsSet ? ' · set' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        {selected && (
-          <div className="flex flex-col gap-2">
-            <span className="text-xs font-medium text-slate-600">Parameters</span>
-            {(definition.arguments as { name: string; direction: string; value?: string }[]).map(
-              (argument, index) => (
-                <label key={argument.name} className="flex items-center gap-2">
-                  <span className="w-28 shrink-0 truncate font-mono text-xs text-slate-500">
-                    {argument.name}
-                    <span className="ml-1 text-[10px] text-slate-400">{argument.direction}</span>
-                  </span>
-                  <input
-                    value={argument.value ?? ''}
-                    disabled={argument.direction === 'out'}
-                    placeholder="{{ Widget.value }}"
-                    onChange={(event) =>
-                      onChange((draft) => {
-                        const args = (draft.definition as unknown as Record<string, unknown>)
-                          .arguments as { value?: string }[];
-                        args[index]!.value = event.target.value;
-                      })
-                    }
-                    className="flex-1 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500 disabled:bg-slate-50"
-                  />
-                </label>
-              ),
-            )}
-          </div>
-        )}
+          {selected && !isProcedure && (
+            <label className="flex items-center gap-1.5 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={definition.tableValued === true}
+                onChange={(event) =>
+                  onChange((draft) => {
+                    (draft.definition as unknown as Record<string, unknown>).tableValued =
+                      event.target.checked;
+                  })
+                }
+                className="h-3 w-3 accent-blue-600"
+              />
+              Table-valued — SELECT * FROM fn(...)
+            </label>
+          )}
+
+          {selected && (
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-slate-600">Arguments</span>
+              <p className="text-[10px] leading-snug text-slate-400">
+                Bind each argument to a widget, or to a query variable below. Do not put widget
+                paths in SQL — use {'{{ name }}'}.
+              </p>
+              {(definition.arguments as { name: string; direction: string; value?: string }[]).map(
+                (argument, index) => (
+                  <label key={`${argument.name}-${index}`} className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 truncate font-mono text-xs text-slate-500">
+                      {argument.name}
+                      <span className="ml-1 text-[10px] text-slate-400">{argument.direction}</span>
+                    </span>
+                    <input
+                      value={argument.value ?? ''}
+                      disabled={argument.direction === 'out'}
+                      placeholder="{{ name }} or {{ Form1.data.Name }}"
+                      onChange={(event) =>
+                        onChange((draft) => {
+                          const args = (draft.definition as unknown as Record<string, unknown>)
+                            .arguments as { value?: string }[];
+                          args[index]!.value = event.target.value;
+                        })
+                      }
+                      className="flex-1 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500 disabled:bg-slate-50"
+                    />
+                  </label>
+                ),
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -338,6 +437,7 @@ function QueryEditorBody({
         namespace.tables.map((table) => ({
           schema: namespace.name,
           name: table.name,
+          kind: table.kind,
           columns: table.columns,
         })),
       ) ?? [];
@@ -354,56 +454,60 @@ function QueryEditorBody({
     );
 
     return (
-      <div className="flex flex-col gap-3 p-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-slate-600">Table</span>
-          <select
-            value={selectedKey}
-            onChange={(event) => {
-              const [schemaName, tableName] = event.target.value.split('::');
-              onChange((draft) => {
-                const target = draft.definition as unknown as Record<string, unknown>;
-                target.schema = schemaName || undefined;
-                target.table = tableName ?? '';
-                target.operation = 'select';
-              });
-            }}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
-          >
-            <option value="">{schema ? 'Select a table…' : 'Schema loading…'}</option>
-            {tables.map((table) => (
-              <option key={`${table.schema}::${table.name}`} value={`${table.schema}::${table.name}`}>
-                {table.schema}.{table.name}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-slate-600">Table or view</span>
+            <select
+              value={selectedKey}
+              onChange={(event) => {
+                const [schemaName, tableName] = event.target.value.split('::');
+                onChange((draft) => {
+                  const target = draft.definition as unknown as Record<string, unknown>;
+                  target.schema = schemaName || undefined;
+                  target.table = tableName ?? '';
+                  target.operation = 'select';
+                });
+              }}
+              className="rounded border border-slate-300 px-2 py-1 text-sm"
+            >
+              <option value="">{schema ? 'Select a table or view…' : 'Schema loading…'}</option>
+              {tables.map((table) => (
+                <option key={`${table.schema}::${table.name}`} value={`${table.schema}::${table.name}`}>
+                  {table.schema}.{table.name}
+                  {table.kind === 'view' ? ' (view)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-slate-600">Limit</span>
-          <input
-            value={String(definition.limit ?? '50')}
-            onChange={(event) =>
-              onChange((draft) => {
-                (draft.definition as unknown as Record<string, unknown>).limit = event.target.value;
-              })
-            }
-            className="w-32 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
-          />
-        </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-slate-600">Limit</span>
+            <input
+              value={String(definition.limit ?? '50')}
+              onChange={(event) =>
+                onChange((draft) => {
+                  (draft.definition as unknown as Record<string, unknown>).limit = event.target.value;
+                })
+              }
+              className="w-32 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
+            />
+          </label>
 
-        {selected && (
-          <p className="font-mono text-[11px] text-slate-500">
-            {selected.columns.map((column) => column.name).join(', ') || 'No columns'}
-          </p>
-        )}
+          {selected && (
+            <p className="font-mono text-[11px] text-slate-500">
+              {selected.columns.map((column) => column.name).join(', ') || 'No columns'}
+            </p>
+          )}
+        </div>
       </div>
     );
   }
 
   if (definition.kind === 'api') {
     return (
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
         <div className="flex gap-2">
           <select
             value={String(definition.method ?? 'GET')}
@@ -425,7 +529,7 @@ function QueryEditorBody({
                 (draft.definition as unknown as Record<string, unknown>).path = event.target.value;
               })
             }
-            placeholder="orders?region={{ RegionSelect.value }}"
+            placeholder="orders?region={{ region }}"
             className="flex-1 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
           />
         </div>
@@ -448,6 +552,7 @@ function QueryEditorBody({
           />
         </label>
       </div>
+      </div>
     );
   }
 
@@ -458,24 +563,343 @@ function QueryEditorBody({
   );
 }
 
-function SchemaHint({ schema }: { schema: DbSchema }) {
+function QueryVariablesEditor({
+  query,
+  page,
+  bindings,
+  onChange,
+  onPageChange,
+}: {
+  query: QueryEntity;
+  page: PageDsl | undefined;
+  bindings: Record<string, unknown>;
+  onChange: (mutate: (query: QueryEntity) => void) => void;
+  onPageChange: (mutate: (page: PageDsl) => void, label?: string) => void;
+}) {
+  const variables = query.variables ?? [];
+  const global = isAppLevelEntity(query);
+  const pageValues = new Map(
+    pageQueryVariableOverrides(page, query.id).map((variable) => [variable.name, variable.value]),
+  );
+
+  const updateDeclared = (index: number, patch: Partial<QueryVariable>): void => {
+    const previousName = variables[index]?.name;
+    onChange((draft) => {
+      const next = [...(draft.variables ?? [])];
+      next[index] = { ...next[index]!, ...patch };
+      draft.variables = next;
+    });
+    if (!global || !page || patch.name === undefined || patch.name === previousName) return;
+    const previousValue = pageValues.get(previousName ?? '');
+    if (previousValue === undefined) return;
+    onPageChange((draft) => {
+      if (previousName) setPageQueryVariableValue(draft, query.id, previousName, '');
+      if (patch.name) setPageQueryVariableValue(draft, query.id, patch.name, previousValue);
+    }, 'query-page-vars');
+  };
+
   return (
-    <div className="max-h-28 shrink-0 overflow-auto border-t border-slate-200 bg-slate-50 p-2">
-      <span className="text-[10px] font-semibold tracking-wide text-slate-400 uppercase">
-        Schema
-      </span>
-      {schema.schemas.map((namespace) => (
-        <div key={namespace.name} className="mt-1">
-          {namespace.tables.map((table) => (
-            <div key={table.name} className="font-mono text-[11px] text-slate-500">
-              <span className="text-slate-700">{table.name}</span>
-              <span className="text-slate-400"> ({table.columns.map((c) => c.name).join(', ')})</span>
-            </div>
-          ))}
+    <div className="min-w-0 shrink-0 overflow-hidden border-t border-slate-200 bg-white">
+      <div className="flex h-7 min-w-0 items-center gap-2 px-2">
+        <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+          Variables
+        </span>
+        {global && (
+          <span className="truncate text-[10px] text-slate-400">
+            Defaults apply on every page. Bind this page&apos;s widgets under This page.
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() =>
+            onChange((draft) => {
+              const current = draft.variables ?? [];
+              draft.variables = [...current, { name: nextVariableName(current), value: '' }];
+            })
+          }
+          className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+        >
+          + Add
+        </button>
+      </div>
+      {variables.length === 0 ? (
+        <p className="truncate px-2 pb-1.5 text-[10px] text-slate-400">
+          {global
+            ? `Use {{ name }} in SQL. Defaults apply on every page; bind widgets under This page.`
+            : `Use {{ name }} in SQL, then map it to a widget here.`}
+        </p>
+      ) : global ? (
+        <div className="max-h-32 overflow-auto px-2 pb-2">
+          {variables.map((variable, index) => {
+            const resolved = bindings[variable.name];
+            const pageValue = pageValues.get(variable.name) ?? '';
+            return (
+              <div
+                key={`${variable.name}-${index}`}
+                className="grid grid-cols-[4.5rem_minmax(0,1fr)_1.25rem] items-center gap-x-1.5 gap-y-1 border-b border-slate-100 py-1.5 last:border-b-0"
+              >
+                <span className="text-[9px] font-medium tracking-wide text-slate-400 uppercase">
+                  Name
+                </span>
+                <input
+                  value={variable.name}
+                  aria-label="Variable name"
+                  onChange={(event) =>
+                    updateDeclared(index, { name: event.target.value.replace(/[^\w]/g, '') })
+                  }
+                  placeholder="name"
+                  className={clsx(controlCompact, 'min-w-0 font-mono')}
+                />
+                <button
+                  type="button"
+                  title="Remove variable"
+                  onClick={() => {
+                    onChange((draft) => {
+                      draft.variables = (draft.variables ?? []).filter((_, i) => i !== index);
+                    });
+                    if (pageValues.has(variable.name)) {
+                      onPageChange((draft) => {
+                        setPageQueryVariableValue(draft, query.id, variable.name, '');
+                      }, 'query-page-vars');
+                    }
+                  }}
+                  className={clsx(
+                    ghostButton,
+                    'row-span-3 flex h-6 w-5 items-center justify-center self-start p-0 hover:bg-red-50 hover:text-red-600',
+                  )}
+                >
+                  ×
+                </button>
+                <span className="text-[9px] font-medium tracking-wide text-slate-400 uppercase">
+                  Default
+                </span>
+                <input
+                  value={variable.value}
+                  aria-label={`Default for ${variable.name || 'variable'}`}
+                  onChange={(event) => updateDeclared(index, { value: event.target.value })}
+                  placeholder="optional"
+                  className={clsx(controlCompact, 'min-w-0 font-mono')}
+                />
+                <span className="text-[9px] font-medium tracking-wide text-slate-400 uppercase">
+                  This page
+                </span>
+                <input
+                  value={pageValue}
+                  aria-label={`This page value for ${variable.name || 'variable'}`}
+                  title={resolved !== undefined ? String(formatValue(resolved)) : undefined}
+                  onChange={(event) =>
+                    onPageChange((draft) => {
+                      setPageQueryVariableValue(draft, query.id, variable.name, event.target.value);
+                    }, 'query-page-vars')
+                  }
+                  placeholder={variable.value || '{{ Form2.data.Name }}'}
+                  className={clsx(controlCompact, 'min-w-0 font-mono')}
+                />
+              </div>
+            );
+          })}
         </div>
-      ))}
+      ) : (
+        <div className="grid max-h-24 grid-cols-[5.25rem_minmax(0,1fr)_1.25rem] items-center gap-x-1.5 gap-y-1 overflow-auto px-2 pb-2">
+          <span className="text-[9px] font-medium tracking-wide text-slate-400 uppercase">Name</span>
+          <span className="text-[9px] font-medium tracking-wide text-slate-400 uppercase">Value</span>
+          <span />
+          {variables.map((variable, index) => {
+            const resolved = bindings[variable.name];
+            return (
+              <div key={`${variable.name}-${index}`} className="contents">
+                <input
+                  value={variable.name}
+                  aria-label="Variable name"
+                  onChange={(event) =>
+                    updateDeclared(index, { name: event.target.value.replace(/[^\w]/g, '') })
+                  }
+                  placeholder="name"
+                  className={clsx(controlCompact, 'min-w-0 font-mono')}
+                />
+                <input
+                  value={variable.value}
+                  aria-label={`Value for ${variable.name || 'variable'}`}
+                  title={resolved !== undefined ? String(formatValue(resolved)) : undefined}
+                  onChange={(event) => updateDeclared(index, { value: event.target.value })}
+                  placeholder="{{ Form2.data.Name }}"
+                  className={clsx(controlCompact, 'min-w-0 font-mono')}
+                />
+                <button
+                  type="button"
+                  title="Remove variable"
+                  onClick={() =>
+                    onChange((draft) => {
+                      draft.variables = (draft.variables ?? []).filter((_, i) => i !== index);
+                    })
+                  }
+                  className={clsx(
+                    ghostButton,
+                    'flex h-6 w-5 items-center justify-center p-0 hover:bg-red-50 hover:text-red-600',
+                  )}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
+}
+
+function SchemaBrowser({
+  schema,
+  onInsert,
+}: {
+  schema: DbSchema;
+  onInsert: (snippet: string, variables?: QueryVariable[]) => void;
+}) {
+  return (
+    <div className="max-h-28 min-w-0 shrink-0 overflow-auto border-t border-slate-200 bg-slate-50 px-2 py-1.5">
+      <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+        Schema
+      </span>
+      {schema.schemas.map((namespace) => {
+        const tables = namespace.tables.filter((table) => table.kind !== 'view');
+        const views = namespace.tables.filter((table) => table.kind === 'view');
+        const functions = namespace.routines.filter((routine) => routine.kind !== 'procedure');
+        if (tables.length === 0 && views.length === 0 && functions.length === 0) return null;
+
+        return (
+          <div key={namespace.name} className="mt-1.5">
+            <div className="text-[10px] font-medium text-slate-500">{namespace.name}</div>
+            {tables.map((table) => (
+              <SchemaRow
+                key={`table:${table.name}`}
+                kind="table"
+                label={table.name}
+                detail={table.columns.map((column) => column.name).join(', ')}
+                onClick={() => onInsert(`SELECT * FROM ${qualifyIdent(namespace.name, table.name)}`)}
+              />
+            ))}
+            {views.map((view) => (
+              <SchemaRow
+                key={`view:${view.name}`}
+                kind="view"
+                label={view.name}
+                detail={view.columns.map((column) => column.name).join(', ')}
+                onClick={() => onInsert(`SELECT * FROM ${qualifyIdent(namespace.name, view.name)}`)}
+              />
+            ))}
+            {functions.map((routine) => (
+              <SchemaRow
+                key={`fn:${routine.name}`}
+                kind="function"
+                label={routine.name}
+                detail={routineSignature(routine)}
+                onClick={() => {
+                  const inputs = inParameters(routine);
+                  const names = uniqueVarNames(inputs.map((parameter) => safeVarName(parameter.name)));
+                  onInsert(functionCallSql(namespace.name, routine, names), names.map((name) => ({ name, value: '' })));
+                }}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SchemaRow({
+  kind,
+  label,
+  detail,
+  onClick,
+}: {
+  kind: 'table' | 'view' | 'function';
+  label: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full min-w-0 items-baseline gap-1.5 rounded px-0.5 py-0.5 text-left hover:bg-white"
+    >
+      <span className="w-12 shrink-0 text-[9px] font-medium tracking-wide text-slate-400 uppercase">
+        {kind}
+      </span>
+      <span className="shrink-0 font-mono text-[11px] text-slate-700">{label}</span>
+      <span className="min-w-0 truncate font-mono text-[10px] text-slate-400">{detail}</span>
+    </button>
+  );
+}
+
+function insertSqlSnippet(
+  current: string,
+  snippet: string,
+  textarea: HTMLTextAreaElement | null,
+): string {
+  if (textarea && document.activeElement === textarea) {
+    const start = textarea.selectionStart ?? current.length;
+    const end = textarea.selectionEnd ?? current.length;
+    return current.slice(0, start) + snippet + current.slice(end);
+  }
+  const trimmed = current.replace(/\s*$/, '');
+  return trimmed ? `${trimmed}\n\n${snippet}` : snippet;
+}
+
+function mergeVariables(
+  existing: QueryVariable[] | undefined,
+  incoming: QueryVariable[],
+): QueryVariable[] {
+  const next = [...(existing ?? [])];
+  const taken = new Set(next.map((variable) => variable.name));
+  for (const variable of incoming) {
+    if (!variable.name || taken.has(variable.name) || !isQueryVariableName(variable.name)) continue;
+    taken.add(variable.name);
+    next.push({ name: variable.name, value: variable.value });
+  }
+  return next;
+}
+
+function inParameters(routine: RoutineMetadata) {
+  return routine.parameters.filter((parameter) => parameter.direction !== 'out');
+}
+
+function safeVarName(name: string): string {
+  const cleaned = name.replace(/[^\w]/g, '');
+  if (isQueryVariableName(cleaned)) return cleaned;
+  return 'arg';
+}
+
+function uniqueVarNames(names: string[]): string[] {
+  const used = new Set<string>();
+  return names.map((name) => {
+    let candidate = name || 'arg';
+    let index = 2;
+    while (used.has(candidate)) {
+      candidate = `${name || 'arg'}${index}`;
+      index += 1;
+    }
+    used.add(candidate);
+    return candidate;
+  });
+}
+
+function qualifyIdent(schema: string, name: string): string {
+  return `${schema}.${name}`;
+}
+
+function functionCallSql(schema: string, routine: RoutineMetadata, argNames: string[]): string {
+  const call = `${qualifyIdent(schema, routine.name)}(${argNames.map((name) => `{{ ${name} }}`).join(', ')})`;
+  return routine.returnsSet ? `SELECT * FROM ${call}` : `SELECT ${call} AS result`;
+}
+
+function routineSignature(routine: RoutineMetadata): string {
+  const args = inParameters(routine)
+    .map((parameter) => `${parameter.name || 'arg'} ${parameter.dataType}`.trim())
+    .join(', ');
+  return args ? `(${args})` : '()';
 }
 
 function ResultTable({ result }: { result: QueryResult }) {

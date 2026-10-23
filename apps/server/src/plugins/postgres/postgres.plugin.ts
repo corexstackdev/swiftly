@@ -247,15 +247,17 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
           routine_schema: string;
           routine_name: string;
           routine_type: string;
+          returns_set: boolean;
           parameters: unknown;
         }>(
           `SELECT n.nspname AS routine_schema,
                   p.proname  AS routine_name,
                   CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END AS routine_type,
+                  p.proretset AS returns_set,
                   COALESCE(
                     json_agg(
                       json_build_object(
-                        'name', COALESCE(pa.name, 'arg' || pa.ordinal),
+                        'name', COALESCE(NULLIF(pa.name, ''), 'arg' || pa.ordinal),
                         'dataType', pa.type_name,
                         'direction', pa.direction,
                         'ordinal', pa.ordinal
@@ -276,7 +278,7 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
                       WITH ORDINALITY AS a(type_oid, ordinality)
              ) pa ON TRUE
             WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-            GROUP BY n.nspname, p.proname, p.prokind, p.oid`,
+            GROUP BY n.nspname, p.proname, p.prokind, p.oid, p.proretset`,
         ),
       ]);
 
@@ -327,6 +329,7 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
           name: row.routine_name,
           kind: row.routine_type === 'procedure' ? 'procedure' : 'function',
           parameters: (row.parameters as RoutineMetadata['parameters']) ?? [],
+          returnsSet: row.returns_set === true,
         });
       }
 

@@ -58,7 +58,7 @@ export function EntityPanel({
   selectedWidgetId: string | null;
   selectedJsId: string | null;
   onSelectQuery: (name: string | null) => void;
-  onCreateQuery: (datasourceId: string) => void;
+  onCreateQuery: (datasourceId: string, scope: 'page' | 'app') => void;
   onSelectWidget: (widgetId: string) => void;
   /** Adds a widget from the palette without a drag. */
   onAddWidget: (widgetType: string) => void;
@@ -146,16 +146,34 @@ export function EntityPanel({
               </span>
               <select
                 value=""
-                onChange={(event) => event.target.value && onCreateQuery(event.target.value)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (!value) return;
+                  const separator = value.indexOf(':');
+                  const scope = value.slice(0, separator);
+                  const datasourceId = value.slice(separator + 1);
+                  if ((scope === 'page' || scope === 'app') && datasourceId) {
+                    onCreateQuery(datasourceId, scope);
+                  }
+                }}
                 className="rounded border border-slate-300 px-1 py-0.5 text-xs"
                 disabled={datasources.length === 0}
               >
                 <option value="">+ New</option>
-                {datasources.map((datasource) => (
-                  <option key={datasource.id} value={datasource.id}>
-                    {datasource.name}
-                  </option>
-                ))}
+                <optgroup label="Global (every page)">
+                  {datasources.map((datasource) => (
+                    <option key={`app-${datasource.id}`} value={`app:${datasource.id}`}>
+                      {datasource.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="This page">
+                  {datasources.map((datasource) => (
+                    <option key={`page-${datasource.id}`} value={`page:${datasource.id}`}>
+                      {datasource.name}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </div>
 

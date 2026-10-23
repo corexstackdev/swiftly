@@ -7,6 +7,7 @@ import {
   type QueryResult,
   type WidgetDsl,
 } from '@swiftly/shared';
+import { localQueryVariableNames, resolvedQueryVariables } from './queryVariables';
 import { getWidgetDefinition } from '@/widgets/registry';
 import { jsObjectStub } from './jsObjects';
 
@@ -55,7 +56,7 @@ export interface DataTreeResult {
 }
 
 /** Pulls every `{{ }}` expression out of a query definition, at any depth. */
-export function collectQueryExpressions(query: QueryEntity): string[] {
+export function collectQueryExpressions(query: QueryEntity, page?: PageDsl): string[] {
   const found: string[] = [];
 
   const visit = (value: unknown): void => {
@@ -71,6 +72,7 @@ export function collectQueryExpressions(query: QueryEntity): string[] {
   };
 
   visit(query.definition);
+  visit(resolvedQueryVariables(query, page));
   return [...new Set(found)];
 }
 
@@ -87,7 +89,13 @@ export function buildDataTree(input: BuildInput): DataTreeResult {
     // Expressions inside the query itself are bindings too: the table name a filter
     // reads, the value a WHERE clause compares against. They are registered here so
     // the same dependency graph evaluates them.
-    collectQueryExpressions(query).forEach((expression, index) => {
+    const locals = localQueryVariableNames(query);
+    collectQueryExpressions(query, input.page).forEach((expression, index) => {
+      // Query-local names (`{{ region }}`) are filled at run from query.variables.
+      // Evaluating them here against the page tree would look like a missing widget.
+      if (locals.has(expression) || expression === 'params' || expression.startsWith('params.')) {
+        return;
+      }
       const path = `__query.${query.name}.${index}`;
       bindings[path] = `{{ ${expression} }}`;
       queryExpressions[path] = expression;
@@ -147,6 +155,7 @@ export function buildDataTree(input: BuildInput): DataTreeResult {
      */
     for (const entry of definition?.exposedState ?? []) {
       if (entry.key in exposed) entity[entry.key] = exposed[entry.key];
+      else if (entity[entry.key] === undefined) entity[entry.key] = null;
     }
 
     dataTree[widget.name] = entity;

@@ -62,6 +62,11 @@ import {
   takenNamesForEntity,
 } from './jsObjectOps';
 import { cloneQuery, rewriteEntityName } from './queryOps';
+import {
+  isPageSpecificVariableValue,
+  removePageQueryBindings,
+  upsertPageQueryVariables,
+} from '@/evaluation/queryVariables';
 import { reflowGridChildren, seedCellProperties } from './gridCells';
 
 /** Guards against a collapsed pane; not a design width. */
@@ -364,6 +369,19 @@ function EditorBody({
       if (!target) return;
       const taken = takenAppLevelNames(draft, { queryId: id });
       if (taken.has(target.name)) target.name = nextAvailableName(target.name, taken);
+      const page = draft.pages.find((candidate) => candidate.id === currentPageId);
+      const declared = target.variables ?? [];
+      const pageValues = declared.filter((variable) => isPageSpecificVariableValue(variable.value));
+      if (page && pageValues.length > 0) {
+        upsertPageQueryVariables(
+          page,
+          target.id,
+          pageValues.map((variable) => ({ name: variable.name, value: variable.value })),
+        );
+        target.variables = declared.map((variable) =>
+          isPageSpecificVariableValue(variable.value) ? { ...variable, value: '' } : variable,
+        );
+      }
       delete target.pageId;
     }, 'query-global');
   };
@@ -372,6 +390,7 @@ function EditorBody({
     const target = history.dsl.queries.find((query) => query.id === id);
     history.update((draft) => {
       draft.queries = draft.queries.filter((query) => query.id !== id);
+      removePageQueryBindings(draft.pages, id);
     }, 'delete-query');
     if (target && selectedQueryName === target.name) {
       setSelectedQueryName(null);
@@ -867,14 +886,19 @@ function EditorBody({
   );
 
   const createQuery = useCallback(
-    (datasourceId: string, seed?: { schema?: string; table: string }) => {
+    (
+      datasourceId: string,
+      options?: { schema?: string; table?: string; scope?: 'page' | 'app' },
+    ) => {
       const datasource = datasources.find((candidate) => candidate.id === datasourceId);
-      const mode = seed ? 'builder' : datasource?.pluginId === 'rest' ? 'api' : 'raw_sql';
+      const mode = options?.table ? 'builder' : datasource?.pluginId === 'rest' ? 'api' : 'raw_sql';
+      const scope = options?.scope ?? 'app';
+      const pageId = scope === 'page' ? currentPageId : undefined;
 
       const id = `q_${Math.random().toString(36).slice(2, 10)}`;
       const name = nextAvailableName(
-        seed ? queryNameFromTable(seed.table) : 'Query',
-        takenAppLevelNames(history.dsl),
+        options?.table ? queryNameFromTable(options.table) : 'Query',
+        takenNamesForEntity(history.dsl, pageId),
       );
 
       history.update((draft) => {
@@ -883,25 +907,26 @@ function EditorBody({
           name,
           datasourceId,
           mode,
-          definition: seed
+          definition: options?.table
             ? {
                 kind: 'builder',
                 operation: 'select',
-                schema: seed.schema,
-                table: seed.table,
+                schema: options.schema,
+                table: options.table,
                 limit: '50',
               }
             : blankDefinition(mode),
           settings: { timeoutMs: 30_000, maxRows: 10_000 },
-          runOnPageLoad: Boolean(seed),
+          runOnPageLoad: Boolean(options?.table),
           confirmBeforeRun: false,
+          ...(pageId ? { pageId } : {}),
         });
       }, 'add-query');
 
       setSelectedQueryName(name);
       setBottomTab('query');
     },
-    [history, datasources],
+    [history, datasources, currentPageId],
   );
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1157,7 +1182,7 @@ function EditorBody({
                 setSelectedQueryName(name);
                 setBottomTab(name ? 'query' : null);
               }}
-              onCreateQuery={createQuery}
+              onCreateQuery={(datasourceId, scope) => createQuery(datasourceId, { scope })}
               onRenameQuery={renameQuery}
               onCopyQuery={copyQuery}
               onMoveQuery={moveQuery}
@@ -1277,7 +1302,7 @@ function EditorBody({
             </div>
 
             {bottomTab && (
-              <div className="h-72 shrink-0 border-t border-slate-200 bg-white">
+              <div className="h-80 shrink-0 border-t border-slate-200 bg-white">
                 {bottomTab === 'query' ? (
                   <QueryPanel
                     query={selectedQuery}
@@ -1313,6 +1338,7 @@ function EditorBody({
                     onDelete={() => {
                       if (selectedQuery) deleteQuery(selectedQuery.id);
                     }}
+                    onPageChange={updatePage}
                   />
                 ) : bottomTab === 'js' ? (
                   <JsObjectPanel

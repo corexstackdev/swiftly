@@ -12,6 +12,20 @@ export interface IdentifierAllowlistEntry {
   allowedValues: string[];
 }
 
+/**
+ * A named value injected when a query runs. SQL (or a function argument) writes
+ * `{{ region }}`; this maps `region` to a widget binding or a literal so the
+ * statement itself does not hard-code `{{ Form1.data.Region }}`.
+ *
+ * On a global query, `value` is the default for every page. A page can override
+ * it through `PageDsl.queryVariables` so each screen passes its own widgets.
+ */
+export interface QueryVariable {
+  name: string;
+  /** Literal, `{{ Form1.data.Name }}`, or a dotted widget path. */
+  value: string;
+}
+
 export interface RawSqlDefinition {
   kind: 'raw_sql';
   sql: string;

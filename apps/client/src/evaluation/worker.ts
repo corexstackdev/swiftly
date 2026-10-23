@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import type { EvaluationError, EvaluationMap } from '@swiftly/shared';
 import { parseBinding, type ParsedBinding } from './parser';
+import { isAbsentPropertyError } from './evaluateSync';
 import { affectedSubgraph, buildGraph, type SortedGraph } from './graph';
 import { hydrateJsObjects, isJsObjectStub } from './jsObjects';
 
@@ -270,7 +271,13 @@ function run(expression: string, scope: Record<string, unknown>): unknown {
     compiled.set(expression, fn);
     if (compiled.size > 2000) compiled.clear();
   }
-  return fn(scope);
+  try {
+    return fn(scope);
+  } catch (error) {
+    // `Table1.selectedRow.id` with no row selected is empty, not a page error.
+    if (isAbsentPropertyError(error)) return undefined;
+    throw error;
+  }
 }
 
 function stringify(value: unknown): string {

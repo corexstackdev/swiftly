@@ -1,5 +1,9 @@
 import clsx from 'clsx';
-import type { ApplicationDsl, PageDsl } from '@swiftly/shared';
+import { isAppLevelEntity, type ApplicationDsl, type PageDsl } from '@swiftly/shared';
+import {
+  pageQueryVariableOverrides,
+  setPageQueryVariableValue,
+} from '@/evaluation/queryVariables';
 
 /**
  * Shown when no widget is selected.
@@ -111,6 +115,8 @@ export function PagePropertiesPanel({
         </Section>
       )}
 
+      {page && <PageQueryInputs dsl={dsl} page={page} onPageChange={onPageChange} />}
+
       <Section title="Navigation">
         <Field label="Style">
           <select
@@ -207,5 +213,64 @@ function Field({
       {children}
       {help && <span className="text-[11px] text-slate-400">{help}</span>}
     </label>
+  );
+}
+
+function PageQueryInputs({
+  dsl,
+  page,
+  onPageChange,
+}: {
+  dsl: ApplicationDsl;
+  page: PageDsl;
+  onPageChange: (mutate: (page: PageDsl) => void, label?: string) => void;
+}) {
+  const queries = (dsl.queries ?? []).filter(
+    (query) => isAppLevelEntity(query) && (query.variables?.length ?? 0) > 0,
+  );
+  if (queries.length === 0) return null;
+
+  return (
+    <Section title="Query inputs">
+      <p className="text-[11px] text-slate-400">
+        Global queries are available on every page. Pass this page&apos;s widgets into their
+        variables.
+      </p>
+      {queries.map((query) => {
+        const overrides = new Map(
+          pageQueryVariableOverrides(page, query.id).map((variable) => [
+            variable.name,
+            variable.value,
+          ]),
+        );
+        return (
+          <div key={query.id} className="flex flex-col gap-2">
+            <span className="font-mono text-[11px] font-medium text-slate-700">{query.name}</span>
+            {(query.variables ?? []).map((variable) => (
+              <Field
+                key={`${query.id}-${variable.name}`}
+                label={variable.name}
+                help={
+                  variable.value
+                    ? `Default: ${variable.value}. Leave empty to use it.`
+                    : 'Leave empty to use the query default.'
+                }
+              >
+                <input
+                  value={overrides.get(variable.name) ?? ''}
+                  placeholder={variable.value || '{{ Form2.data.Name }}'}
+                  onChange={(event) =>
+                    onPageChange((draft) => {
+                      setPageQueryVariableValue(draft, query.id, variable.name, event.target.value);
+                    }, 'page-query-input')
+                  }
+                  className={`${inputClass} font-mono`}
+                />
+              </Field>
+            ))}
+          </div>
+        );
+      })}
+    </Section>
   );
 }

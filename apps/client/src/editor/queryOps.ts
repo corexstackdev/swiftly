@@ -18,11 +18,13 @@ export function findQueryBindings(dsl: ApplicationDsl, query: QueryEntity): JsBi
     for (const widget of flatten(page.widgets)) {
       collectFromWidget(widget, page.name, query.name, matches, refs);
     }
+    collectValue(page.queryVariables, `${page.name} · query inputs`, matches, refs);
   }
 
   for (const other of dsl.queries) {
     if (other.id === query.id) continue;
     collectValue(other.definition, `Query ${other.name}`, matches, refs);
+    collectValue(other.variables, `Query ${other.name} · variables`, matches, refs);
   }
 
   for (const object of dsl.jsObjects ?? []) {
@@ -54,12 +56,22 @@ export function rewriteEntityName(
     for (const widget of flatten(page.widgets)) {
       rewriteWidget(widget, oldName, newName);
     }
+    if (page.queryVariables) {
+      page.queryVariables = rewriteValue(
+        page.queryVariables,
+        oldName,
+        newName,
+      ) as typeof page.queryVariables;
+    }
   }
 
   for (const query of dsl.queries) {
     if (query.id === scope.skipQueryId) continue;
     if (scope.pageId && query.pageId && query.pageId !== scope.pageId) continue;
     query.definition = rewriteValue(query.definition, oldName, newName) as typeof query.definition;
+    if (query.variables) {
+      query.variables = rewriteValue(query.variables, oldName, newName) as typeof query.variables;
+    }
   }
 
   for (const object of dsl.jsObjects ?? []) {
@@ -78,8 +90,9 @@ export function cloneQuery(query: QueryEntity, patch: Partial<QueryEntity>): Que
   return {
     ...query,
     ...patch,
-    definition: structuredClone(query.definition),
-    settings: { ...query.settings },
+    definition: structuredClone(patch.definition ?? query.definition),
+    settings: { ...query.settings, ...patch.settings },
+    variables: structuredClone(patch.variables ?? query.variables),
   };
 }
 

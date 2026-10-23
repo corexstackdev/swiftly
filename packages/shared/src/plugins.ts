@@ -146,6 +146,8 @@ export interface RoutineMetadata {
   name: string;
   kind: 'procedure' | 'function';
   parameters: RoutineParameter[];
+  /** Postgres `RETURNS SETOF` / table functions — call with `SELECT * FROM fn(...)`. */
+  returnsSet?: boolean;
 }
 
 export interface SchemaNamespace {

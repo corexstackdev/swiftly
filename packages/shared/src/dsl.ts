@@ -6,7 +6,7 @@
  * and are never persisted.
  */
 
-import type { AnyQueryDefinition } from './queries';
+import type { AnyQueryDefinition, QueryVariable } from './queries';
 
 /** Bumped whenever the document shape changes in a way that needs a migration. */
 export const DSL_VERSION = 1;
@@ -38,6 +38,17 @@ export interface PageDsl {
   /** Enforced by the server on the runtime route; hiding a nav item is cosmetic. */
   requiredPermissions?: string[];
   widgets: WidgetDsl[];
+  /**
+   * Page-specific values for global query variables. The SQL stays on the query
+   * (`{{ orderId }}`); this page maps `orderId` to a widget or literal.
+   */
+  queryVariables?: PageQueryVariables[];
+}
+
+/** One global query's variable values on a given page. */
+export interface PageQueryVariables {
+  queryId: string;
+  variables: QueryVariable[];
 }
 
 export interface WidgetLayout {
@@ -198,6 +209,15 @@ export interface QueryEntity {
   /** Ask the user before running, for queries that change data. */
   confirmBeforeRun?: boolean;
   settings: QuerySettings;
+  /**
+   * Named values injected into this query's binding scope as `{{ name }}` and
+   * `{{ params.name }}`. Lets inline SQL call a function or filter a view without
+   * hard-coding widget paths in the statement.
+   *
+   * On a global query these are defaults; each page may override them via
+   * `PageDsl.queryVariables`.
+   */
+  variables?: QueryVariable[];
   /**
    * Page this query belongs to. Absent means app-level: available on every page
    * (including older documents, which were all app-level).

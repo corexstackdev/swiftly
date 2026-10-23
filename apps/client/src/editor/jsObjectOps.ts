@@ -97,10 +97,12 @@ export function findJsObjectBindings(dsl: ApplicationDsl, jsObject: JsObjectDsl)
     for (const widget of flatten(page.widgets)) {
       collectFromWidget(widget, page.name, matches, refs);
     }
+    collectValue(page.queryVariables, `${page.name} · query inputs`, matches, refs);
   }
 
   for (const query of dsl.queries) {
     collectValue(query.definition, `Query ${query.name}`, matches, refs);
+    collectValue(query.variables, `Query ${query.name} · variables`, matches, refs);
   }
 
   for (const other of dsl.jsObjects ?? []) {

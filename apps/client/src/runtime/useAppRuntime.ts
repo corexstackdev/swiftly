@@ -24,6 +24,7 @@ import {
   type QueryRuntimeState,
 } from '@/evaluation/dataTree';
 import { evaluateExpression, isActionEnabled, resolveValue, writePath } from '@/evaluation/evaluateSync';
+import { bindQueryVariables } from '@/evaluation/queryVariables';
 import { hydrateJsObjects } from '@/evaluation/jsObjects';
 import {
   attachJsObjects,
@@ -250,8 +251,14 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
       if (!query) return {};
 
       const scope = liveExpressionScope();
+      const params = bindQueryVariables(query, scope, currentPage);
       const values: Record<string, unknown> = {};
-      for (const expression of collectQueryExpressions(query)) {
+      for (const [name, value] of Object.entries(params)) {
+        values[name] = value === undefined ? null : value;
+        values[`params.${name}`] = value === undefined ? null : value;
+      }
+      for (const expression of collectQueryExpressions(query, currentPage)) {
+        if (expression in values) continue;
         const outcome = evaluateExpression(expression, scope);
         // `undefined` disappears from the request body when it is serialised, and
         // the server then reports the binding as missing rather than as null —

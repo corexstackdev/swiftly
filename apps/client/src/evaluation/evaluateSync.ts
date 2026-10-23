@@ -34,11 +34,28 @@ export function evaluateExpression(
     }
     return { value: fn(scope) };
   } catch (error) {
+    // `Table1.selectedRow.id` before a row is clicked — empty, not a broken binding.
+    if (isAbsentPropertyError(error)) return { value: undefined };
     return {
       value: undefined,
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/** True when the expression walked off undefined/null (`foo.bar` with no foo.bar). */
+export function isAbsentPropertyError(error: unknown): boolean {
+  const message =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return (
+    /Cannot read propert(?:y|ies) of (?:undefined|null)/i.test(message) ||
+    /(?:undefined|null) is not an object/i.test(message) ||
+    / is (?:undefined|null)$/i.test(message)
+  );
 }
 
 /** Writes an `Entity.property` path into a scope object, creating containers as needed. */
