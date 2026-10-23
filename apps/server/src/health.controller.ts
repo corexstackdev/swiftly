@@ -16,13 +16,11 @@ export class HealthController {
   @Get()
   async check() {
     const [database, cache] = await Promise.all([
-      this.prisma
-        .$queryRaw`SELECT 1`.then(() => 'up' as const)
-        .catch(() => 'down' as const),
-      this.redis.client
-        .ping()
-        .then(() => 'up' as const)
-        .catch(() => 'down' as const),
+      withTimeout(
+        this.prisma.$queryRaw`SELECT 1`.then(() => 'up' as const),
+        2_000,
+      ),
+      withTimeout(this.redis.client.ping().then(() => 'up' as const), 2_000),
     ]);
 
     return {
@@ -32,4 +30,13 @@ export class HealthController {
       timestamp: new Date().toISOString(),
     };
   }
+}
+
+function withTimeout(task: Promise<'up'>, ms: number): Promise<'up' | 'down'> {
+  return Promise.race([
+    task.catch(() => 'down' as const),
+    new Promise<'down'>((resolve) => {
+      setTimeout(() => resolve('down'), ms);
+    }),
+  ]);
 }

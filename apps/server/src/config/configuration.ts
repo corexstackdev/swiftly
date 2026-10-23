@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -17,7 +18,10 @@ const envSchema = z.object({
   /** 32 bytes hex for AES-256-GCM. Generate with `openssl rand -hex 32`. */
   ENCRYPTION_KEY: z
     .string()
-    .regex(/^[0-9a-f]{64}$/i, 'ENCRYPTION_KEY must be 64 hex characters (32 bytes)'),
+    .min(32, 'ENCRYPTION_KEY must be at least 32 characters')
+    .transform((value) =>
+      /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : createHash('sha256').update(value).digest('hex'),
+    ),
 
   CLIENT_URL: z.string().url().default('http://localhost:5173'),
 
@@ -34,7 +38,13 @@ const envSchema = z.object({
 export type AppConfig = z.infer<typeof envSchema>;
 
 export function validateEnv(raw: Record<string, unknown>): AppConfig {
-  const parsed = envSchema.safeParse(raw);
+  const parsed = envSchema.safeParse({
+    ...raw,
+    CLIENT_URL:
+      typeof raw.CLIENT_URL === 'string' && raw.CLIENT_URL.trim() !== ''
+        ? raw.CLIENT_URL
+        : publicOrigin(raw),
+  });
   if (!parsed.success) {
     const details = parsed.error.issues
       .map((i) => `  ${i.path.join('.')}: ${i.message}`)
@@ -42,4 +52,10 @@ export function validateEnv(raw: Record<string, unknown>): AppConfig {
     throw new Error(`Invalid environment configuration:\n${details}`);
   }
   return parsed.data;
+}
+
+function publicOrigin(raw: Record<string, unknown>): string {
+  const renderUrl = raw.RENDER_EXTERNAL_URL;
+  if (typeof renderUrl === 'string' && renderUrl.length > 0) return renderUrl.replace(/\/$/, '');
+  return 'http://localhost:5173';
 }

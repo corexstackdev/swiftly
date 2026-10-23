@@ -93,6 +93,26 @@ on the machine. The platform database is your local PostgreSQL (`swiftlydb` on 5
 | PostgreSQL (platform, `swiftlydb`) | 5432 |
 | Redis | 6409 |
 
+## Deploy on Render
+
+The API and the editor run as **one web service** so `/api` and the UI share a
+hostname (auth cookies stay first-party). Postgres and Redis are provisioned
+from `render.yaml`.
+
+1. Push this branch (`sanjay-dev`) to GitHub.
+2. In [Render](https://dashboard.render.com) → **New** → **Blueprint**, connect
+   the repo. Render reads `render.yaml`.
+3. Wait for the first deploy. The public URL is `https://swiftly.onrender.com`
+   (Render may add a suffix).
+4. Sign in with the seed accounts (`builder@acme.test` / `Password123!`).
+
+The free web instance sleeps after idle traffic; the first request after that
+can take ~30s. Upgrade the web service if you want it always on.
+
+`ENCRYPTION_KEY` and `SESSION_SECRET` are generated on first apply. Do not
+rotate `ENCRYPTION_KEY` later unless you are ready to re-enter every stored
+datasource password.
+
 ## Two things worth knowing before changing anything
 
 **Query text always comes from the server's stored DSL, never from the request.** The

@@ -1,0 +1,51 @@
+# Render Blueprint — one web process serves the editor and /api (same origin,
+# so httpOnly auth cookies stay first-party). Postgres and Redis are linked.
+#
+# Dashboard: New → Blueprint → this repo. Branch: sanjay-dev (has the app).
+# After the first deploy, seed accounts are builder@acme.test / Password123!
+
+services:
+  - type: web
+    name: swiftly
+    runtime: node
+    plan: free
+    region: singapore
+    branch: sanjay-dev
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm build:render
+    startCommand: pnpm start:render
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: '22'
+      - key: DATABASE_URL
+        fromDatabase:
+          name: swiftly-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: swiftly-redis
+          type: keyvalue
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: REGION
+        value: singapore
+
+  - type: keyvalue
+    name: swiftly-redis
+    plan: free
+    region: singapore
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+databases:
+  - name: swiftly-db
+    plan: free
+    region: singapore
+    postgresMajorVersion: '16'
+    ipAllowList: []

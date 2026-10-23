@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -6,13 +8,14 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import fastifyStatic from '@fastify/static';
 import { AppModule } from './app.module';
 import { DomainExceptionFilter } from './common/filters/domain-exception.filter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ bodyLimit: 16 * 1024 * 1024 }),
+    new FastifyAdapter({ bodyLimit: 16 * 1024 * 1024, trustProxy: true }),
   );
 
   const config = app.get(ConfigService);
@@ -37,10 +40,34 @@ async function bootstrap(): Promise<void> {
   app.useGlobalFilters(new DomainExceptionFilter());
   app.enableShutdownHooks();
 
+  await serveClient(app);
+
   const port = config.get<number>('PORT', 3001);
   await app.listen({ port, host: '0.0.0.0' });
 
   new Logger('Bootstrap').log(`Server listening on http://localhost:${port}/api`);
+}
+
+/** In production the editor is the same origin as `/api`, so auth cookies stay first-party. */
+async function serveClient(app: NestFastifyApplication): Promise<void> {
+  const clientDist = join(__dirname, '..', '..', 'client', 'dist');
+  if (!existsSync(join(clientDist, 'index.html'))) return;
+
+  await app.register(fastifyStatic, {
+    root: clientDist,
+    prefix: '/',
+    wildcard: false,
+    index: ['index.html'],
+  });
+
+  const fastify = app.getHttpAdapter().getInstance();
+  fastify.setNotFoundHandler((request, reply) => {
+    const url = request.raw.url ?? '';
+    if (url.startsWith('/api')) {
+      return reply.status(404).send({ statusCode: 404, message: 'Not Found' });
+    }
+    return reply.sendFile('index.html');
+  });
 }
 
 void bootstrap();

@@ -14,6 +14,8 @@ export class RedisService implements OnModuleDestroy {
     this.client = new Redis(url, {
       maxRetriesPerRequest: 3,
       lazyConnect: false,
+      // Dual-stack: Render's private network may resolve to IPv6.
+      family: 0,
       // ioredis otherwise retries forever and emits `error` on every attempt,
       // which filled the terminal when the local container was stopped.
       retryStrategy: (times) => Math.min(times * 200, 5_000),
