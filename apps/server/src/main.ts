@@ -53,15 +53,24 @@ async function serveClient(app: NestFastifyApplication): Promise<void> {
   const clientDist = join(__dirname, '..', '..', 'client', 'dist');
   if (!existsSync(join(clientDist, 'index.html'))) return;
 
+  // Nest's listen() always installs a 404 handler, so we cannot call
+  // setNotFoundHandler here. Static files get exact routes; SPA paths use GET /*.
   await app.register(fastifyStatic, {
     root: clientDist,
     prefix: '/',
     wildcard: false,
-    index: ['index.html'],
+    index: false,
+    decorateReply: true,
   });
 
   const fastify = app.getHttpAdapter().getInstance();
-  fastify.setNotFoundHandler((request, reply) => {
+  const sendIndex = (
+    _request: unknown,
+    reply: { sendFile: (file: string) => unknown },
+  ) => reply.sendFile('index.html');
+
+  fastify.get('/', sendIndex);
+  fastify.get('/*', (request, reply) => {
     const url = request.raw.url ?? '';
     if (url.startsWith('/api')) {
       return reply.status(404).send({ statusCode: 404, message: 'Not Found' });
