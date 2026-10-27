@@ -6,8 +6,9 @@ import { MIN_CELL_HEIGHT, cellRect } from './gridCells';
 /**
  * Resize handles for a widget sitting in a Grid cell.
  *
- * Drag is in pixels; the commit is in cells. The preview snaps to column and
- * row tracks so a control grows by whole cells, not free-form coordinates.
+ * Width snaps to column tracks. Height is this field's own pixel box — it must
+ * not steal the next row (that used to stretch the inputs below and bury their
+ * handles). Row span stays what the Cell panel set.
  */
 
 interface DragState {
@@ -29,6 +30,7 @@ interface DragState {
   originColumn: string;
   originRow: string;
   originTemplate: string;
+  originHeights: string;
   startTracks: number[];
   edges: Edges;
   latest: Placement;
@@ -90,15 +92,14 @@ export function GridChildResizer({
 
   const applyPlacement = (drag: DragState, next: Placement): void => {
     drag.cell.style.gridColumn = `${next.col + 1} / span ${next.colSpan}`;
-    drag.cell.style.gridRow = `${next.row + 1} / span ${next.rowSpan}`;
-
-    const tracks = drag.startTracks.slice();
-    while (tracks.length < next.row + next.rowSpan) tracks.push(drag.minRowHeight);
-    const perRow = next.heightPx / next.rowSpan;
-    for (let row = next.row; row < next.row + next.rowSpan; row += 1) {
-      tracks[row] = perRow;
-    }
+    drag.cell.style.height = `${next.heightPx}px`;
+    drag.cell.dataset.gridHeight = String(next.heightPx);
+    const tracks = rowTracksFromCells(drag.grid, drag.minRowHeight, {
+      cell: drag.cell,
+      heightPx: next.heightPx,
+    });
     drag.grid.style.gridTemplateRows = tracks.map((height) => `${height}px`).join(' ');
+    drag.grid.dataset.gridRowHeights = tracks.join(',');
   };
 
   const placementFromPointer = (clientX: number, clientY: number, drag: DragState): Placement => {
@@ -127,14 +128,6 @@ export function GridChildResizer({
     if ((drag.edges.s || drag.edges.n) && drag.rowUnit > 0) {
       const signed = drag.edges.s ? clientY - drag.startY : drag.startY - clientY;
       next.heightPx = snapHeight(Math.max(MIN_CELL_HEIGHT, drag.startHeight + signed));
-      next.rowSpan =
-        next.heightPx < drag.minRowHeight
-          ? 1
-          : Math.max(1, Math.round(next.heightPx / drag.minRowHeight));
-      if (drag.edges.n && !drag.edges.s) {
-        const bottom = drag.startRow + drag.startRowSpan;
-        next.row = Math.max(0, bottom - next.rowSpan);
-      }
     }
 
     return next;
@@ -165,7 +158,10 @@ export function GridChildResizer({
     } else {
       drag.cell.style.gridColumn = drag.originColumn;
       drag.cell.style.gridRow = drag.originRow;
+      drag.cell.style.height = `${drag.startHeight}px`;
+      drag.cell.dataset.gridHeight = String(drag.startHeight);
       drag.grid.style.gridTemplateRows = drag.originTemplate;
+      drag.grid.dataset.gridRowHeights = drag.originHeights;
     }
     setPreview(null);
   };
@@ -195,11 +191,16 @@ export function GridChildResizer({
     const start = cellRect(child, gridColumns);
     const gridWidth = grid.getBoundingClientRect().width;
     const columnTrack = Math.max(1, (gridWidth - columnGap * (gridColumns - 1)) / gridColumns);
-    const startTracks = parseRowHeights(grid.dataset.gridRowHeights, minRowHeight, start.row + start.rowSpan);
+    const startTracks = parseRowHeights(
+      grid.dataset.gridRowHeights,
+      minRowHeight,
+      start.row + start.rowSpan,
+    );
     const startHeight = Math.max(
       MIN_CELL_HEIGHT,
-      startTracks.slice(start.row, start.row + start.rowSpan).reduce((total, height) => total + height, 0) ||
-        cell.getBoundingClientRect().height - Math.max(0, start.rowSpan - 1) * rowGap,
+      Number(cell.dataset.gridHeight) ||
+        cell.getBoundingClientRect().height ||
+        startTracks.slice(start.row, start.row + start.rowSpan).reduce((total, height) => total + height, 0),
     );
 
     const move = (moveEvent: PointerEvent): void => {
@@ -236,6 +237,7 @@ export function GridChildResizer({
       originColumn: cell.style.gridColumn,
       originRow: cell.style.gridRow,
       originTemplate: grid.style.gridTemplateRows,
+      originHeights: grid.dataset.gridRowHeights ?? startTracks.join(','),
       startTracks,
       edges,
       latest: { ...start, heightPx: startHeight },
@@ -273,7 +275,7 @@ export function GridChildResizer({
 
   return (
     <div ref={wrapperRef} className="relative h-full w-full">
-      {children}
+      <div className="h-full w-full overflow-hidden">{children}</div>
 
       {HANDLES.map((handle) => (
         <Handle
@@ -381,6 +383,29 @@ function clamp(value: number, min: number, max: number): number {
 
 function snapHeight(value: number): number {
   return Math.max(MIN_CELL_HEIGHT, Math.round(value / HEIGHT_SNAP) * HEIGHT_SNAP);
+}
+
+function rowTracksFromCells(
+  grid: HTMLElement,
+  minRowHeight: number,
+  override: { cell: HTMLElement; heightPx: number },
+): number[] {
+  const rowCount = Math.max(1, Number(grid.dataset.gridRows ?? 1));
+  const heights = Array.from({ length: rowCount }, () => 0);
+  const cells = grid.querySelectorAll<HTMLElement>(':scope > [data-grid-row]');
+  cells.forEach((element) => {
+    const row = Number(element.dataset.gridRow);
+    const span = Math.max(1, Number(element.dataset.gridRowSpan ?? 1));
+    const total =
+      element === override.cell
+        ? override.heightPx
+        : Math.max(MIN_CELL_HEIGHT, Number(element.dataset.gridHeight ?? minRowHeight));
+    const perRow = total / span;
+    for (let index = row; index < row + span; index += 1) {
+      if (index >= 0 && index < rowCount) heights[index] = Math.max(heights[index] ?? 0, perRow);
+    }
+  });
+  return heights.map((height) => (height > 0 ? height : minRowHeight));
 }
 
 function parseRowHeights(raw: string | undefined, fallback: number, minCount: number): number[] {

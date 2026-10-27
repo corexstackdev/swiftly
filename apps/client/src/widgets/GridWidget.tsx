@@ -1,16 +1,22 @@
 import { type CSSProperties, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';
-import { cellRect, gridMinRowHeight, rowTrackHeights, usedRowCount } from '@/editor/gridCells';
+import {
+  cellRect,
+  childTrackHeight,
+  gridMinRowHeight,
+  rowTrackHeights,
+  usedRowCount,
+} from '@/editor/gridCells';
 
 /**
  * Grid — a CSS cell layout, not a nested page canvas.
  *
- * Children occupy column/row tracks. Resizing a control snaps to those tracks
- * (`col` / `row` / `colSpan` / `rowSpan`) instead of free-form coordinates.
- * That is what makes Grid different from Container and Form.
+ * Children occupy column/row tracks. Width snaps to columns; height is each
+ * field's own pixel box so shrinking one input cannot stretch the row below.
+ * `col` / `row` / `colSpan` / `rowSpan` still decide placement. That is what
+ * makes Grid different from Container and Form.
  */
 
 const SHADOWS: Record<string, string> = {
@@ -104,6 +110,8 @@ function GridWidget({
           columnGap,
           rowGap,
           alignContent: 'start',
+          alignItems: 'start',
+          justifyItems: 'stretch',
         }}
       >
         {showGuides &&
@@ -125,15 +133,25 @@ function GridWidget({
             );
           })}
 
-        {childList.map((child) => (
-          <div
-            key={child.id}
-            className="relative z-[1] min-h-0 min-w-0"
-            style={cellPlacementStyle(child, effectiveColumns)}
-          >
-            {renderChild?.(child)}
-          </div>
-        ))}
+        {childList.map((child) => {
+          const rect = cellRect(child, effectiveColumns);
+          const height = childTrackHeight(child, minRowHeight);
+          return (
+            <div
+              key={child.id}
+              className={clsx(
+                'relative z-[1] min-h-0 min-w-0',
+                !isDesignMode && 'overflow-hidden',
+              )}
+              data-grid-row={rect.row}
+              data-grid-row-span={rect.rowSpan}
+              data-grid-height={height}
+              style={cellPlacementStyle(rect, height)}
+            >
+              {renderChild?.(child)}
+            </div>
+          );
+        })}
 
         {isDesignMode && childList.length === 0 && (
           <p
@@ -148,14 +166,17 @@ function GridWidget({
   );
 }
 
-function cellPlacementStyle(child: WidgetDsl, columns: number): CSSProperties {
-  const rect = cellRect(child, columns);
+function cellPlacementStyle(
+  rect: { col: number; row: number; colSpan: number; rowSpan: number },
+  height: number,
+): CSSProperties {
   return {
     gridColumn: `${rect.col + 1} / span ${rect.colSpan}`,
     gridRow: `${rect.row + 1} / span ${rect.rowSpan}`,
+    height,
     minWidth: 0,
     minHeight: 0,
-    alignSelf: 'stretch',
+    alignSelf: 'start',
     justifySelf: 'stretch',
   };
 }

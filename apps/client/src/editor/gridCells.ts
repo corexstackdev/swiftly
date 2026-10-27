@@ -99,9 +99,10 @@ export function childTrackHeight(child: WidgetDsl, minRowHeight: number): number
 /**
  * Pixel height of each CSS row.
  *
- * A child can be shorter than the default track (`heightPx` from a shrink
- * drag). Each row is as tall as the tallest occupant, so a shared row stays
- * aligned and a lone field can shrink.
+ * A child's `heightPx` is its own box, not a licence to rewrite the next row.
+ * Each track is as tall as the tallest occupant of that row, so shrinking one
+ * field never stretches the fields below it. A shorter sibling sits at the
+ * start of the same row.
  */
 export function rowTrackHeights(
   children: WidgetDsl[],

@@ -350,7 +350,8 @@ function PropertyPanelBody({
         {parent?.type === 'grid' && (
           <Section title="Cell">
             <p className="text-[11px] text-slate-400">
-              Drag the handles on the canvas, or pick a size. Pull the bottom edge up to shorten a field.
+              Drag the handles on the canvas, or pick a size. Pull the bottom edge up to shorten this
+              field — the next row stays where it is.
             </p>
             <div className="flex flex-col gap-1">
               <span className="text-[11px] font-medium text-slate-600">Width</span>

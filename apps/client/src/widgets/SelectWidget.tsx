@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import clsx from 'clsx';
 import type { TabDisplayMode } from '@swiftly/shared';
@@ -26,10 +27,18 @@ const OPTION_HEIGHT = 30;
 function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0, maxHeight: 224 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const options = useMemo<ChoiceOption[]>(() => normaliseChoiceOptions(properties), [properties]);
   const dataError = choiceSourceError(properties);
+
+  const close = (): void => {
+    setOpen(false);
+    setSearch('');
+  };
 
   useEffect(() => {
     if (state.value === undefined || state.value === null || state.value === '') return;
@@ -51,6 +60,68 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
     overscan: 10,
   });
 
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const place = (): void => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const gap = 4;
+      const edge = 8;
+      const searchBar = 37;
+      const spaceBelow = window.innerHeight - rect.bottom - gap - edge;
+      const spaceAbove = rect.top - gap - edge;
+      const flip = spaceBelow < 120 && spaceAbove > spaceBelow;
+      const available = Math.max(96, flip ? spaceAbove : spaceBelow);
+      const maxHeight = Math.min(224, available);
+      const estimated = searchBar + Math.min(maxHeight, Math.max(OPTION_HEIGHT, filtered.length * OPTION_HEIGHT));
+      const menuHeight = menuRef.current?.offsetHeight || estimated;
+      let top = flip ? rect.top - menuHeight - gap : rect.bottom + gap;
+      let left = rect.left;
+      const width = Math.max(rect.width, 160);
+      if (left + width > window.innerWidth - edge) left = Math.max(edge, window.innerWidth - width - edge);
+      if (left < edge) left = edge;
+      if (top < edge) top = edge;
+      if (top + menuHeight > window.innerHeight - edge) {
+        top = Math.max(edge, window.innerHeight - menuHeight - edge);
+      }
+      setPos({ top, left, width, maxHeight });
+    };
+
+    place();
+    virtualizer.measure();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open, filtered.length, search, virtualizer]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      close();
+    };
+
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
   const selected = options.find((option) => option.value === state.value);
   const placeholder = String(properties.placeholder ?? 'Select…');
 
@@ -61,37 +132,16 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
    */
   const valueStyle = fieldControlStyle(properties, 'value');
 
-  return (
-    <div className="flex h-full w-full flex-col gap-1">
-      <FieldLabel
-        text={properties.label}
-        icon={properties.labelIcon}
-        display={properties.labelDisplay as TabDisplayMode | undefined}
-        style={textStyleToCss(properties, 'label')}
-      />
-
-      <div className="relative min-h-0 flex-1">
-        <button
-          type="button"
-          disabled={Boolean(properties.disabled)}
-          onClick={() => setOpen((previous) => !previous)}
-          style={valueStyle}
-          className={clsx(
-            'no-drag flex h-full w-full items-center justify-between rounded border border-slate-300 bg-white px-2 text-left',
-            'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 focus:outline-none',
-            'disabled:bg-slate-50 disabled:text-slate-400',
-          )}
-        >
-          <span
-            className={clsx('truncate', !selected && 'text-slate-400')}
+  const menu =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            ref={menuRef}
+            role="listbox"
+            className="no-drag fixed z-[200] rounded border border-slate-200 bg-white shadow-lg"
+            style={{ top: pos.top, left: pos.left, width: pos.width }}
+            onMouseDown={(event) => event.stopPropagation()}
           >
-            {selected ? selected.label : placeholder}
-          </span>
-          <span className="ml-2 shrink-0 text-slate-400">▾</span>
-        </button>
-
-        {open && (
-          <div className="absolute top-full left-0 z-50 mt-1 w-full rounded border border-slate-200 bg-white shadow-lg">
             <input
               autoFocus
               value={search}
@@ -99,7 +149,7 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
               placeholder="Search"
               className="no-drag w-full border-b border-slate-200 px-2 py-1.5 text-sm outline-none"
             />
-            <div ref={listRef} className="max-h-56 overflow-auto pt-3">
+            <div ref={listRef} className="overflow-auto pt-1" style={{ maxHeight: pos.maxHeight }}>
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const option = filtered[virtualRow.index];
@@ -108,11 +158,12 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
                     <button
                       key={virtualRow.key}
                       type="button"
+                      role="option"
+                      aria-selected={option.value === state.value}
                       onClick={() => {
                         setState({ value: option.value, selectedLabel: option.label });
                         fireEvent('onChange', { value: option.value });
-                        setOpen(false);
-                        setSearch('');
+                        close();
                       }}
                       style={{
                         position: 'absolute',
@@ -140,8 +191,56 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
                 </div>
               )}
             </div>
-          </div>
-        )}
+          </div>,
+          document.body,
+        )
+      : null;
+
+  return (
+    <div className="flex h-full w-full flex-col gap-1">
+      <FieldLabel
+        text={properties.label}
+        icon={properties.labelIcon}
+        display={properties.labelDisplay as TabDisplayMode | undefined}
+        style={textStyleToCss(properties, 'label')}
+      />
+
+      <div className="relative min-h-0 flex-1">
+        <button
+          ref={triggerRef}
+          type="button"
+          disabled={Boolean(properties.disabled)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => {
+            if (open) {
+              close();
+              return;
+            }
+            const rect = triggerRef.current?.getBoundingClientRect();
+            if (rect) {
+              setPos({
+                top: rect.bottom + 4,
+                left: rect.left,
+                width: Math.max(rect.width, 160),
+                maxHeight: 224,
+              });
+            }
+            setOpen(true);
+          }}
+          style={valueStyle}
+          className={clsx(
+            'no-drag flex h-full w-full items-center justify-between rounded border border-slate-300 bg-white px-2 text-left',
+            'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 focus:outline-none',
+            'disabled:bg-slate-50 disabled:text-slate-400',
+          )}
+        >
+          <span className={clsx('truncate', !selected && 'text-slate-400')}>
+            {selected ? selected.label : placeholder}
+          </span>
+          <span className="ml-2 shrink-0 text-slate-400">▾</span>
+        </button>
+        {menu}
       </div>
       {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
     </div>
