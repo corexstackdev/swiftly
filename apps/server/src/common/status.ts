@@ -49,5 +49,5 @@ export type ComponentIsolation = (typeof ComponentIsolation)[keyof typeof Compon
  */
 export function parseStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === 'string');
+  return value.filter((entry: unknown): entry is string => typeof entry === 'string');
 }

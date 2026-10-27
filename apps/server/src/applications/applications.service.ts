@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable, NotFoundException } from '@nestj
 import type { ApplicationDsl } from '@swiftly/shared';
 import { DSL_VERSION } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import type { ReleaseWithEnvironment } from '../prisma/types';
 import { AuditService } from '../audit/audit.service';
 
 @Injectable()
@@ -12,7 +13,19 @@ export class ApplicationsService {
   ) {}
 
   async list(organizationId: string, workspaceId?: string) {
-    const applications = await this.prisma.application.findMany({
+    const applications: Array<{
+      id: string;
+      name: string;
+      slug: string;
+      icon: string | null;
+      description: string | null;
+      status: string;
+      updatedAt: Date;
+      workspaceId: string;
+      publishedVersionId: string | null;
+      createdBy: { id: string; name: string };
+      releases: ReleaseWithEnvironment[];
+    }> = await this.prisma.application.findMany({
       where: {
         workspace: { organizationId },
         ...(workspaceId ? { workspaceId } : {}),

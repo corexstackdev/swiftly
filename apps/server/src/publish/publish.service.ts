@@ -7,6 +7,7 @@ import {
 import { VersionStatus } from '../common/status';
 import { queriesOnPage, type ApplicationDsl } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import type { EnvRecord, PrismaTx, ReleaseWithEnvironment } from '../prisma/types';
 import { AuditService } from '../audit/audit.service';
 import { PERMISSIONS, type Permission } from '../common/permissions';
 
@@ -36,7 +37,7 @@ export class PublishService {
     }
 
     const uniqueIds = [...new Set(environmentIds)];
-    const environments = await this.prisma.environment.findMany({
+    const environments: EnvRecord[] = await this.prisma.environment.findMany({
       where: { organizationId, id: { in: uniqueIds } },
     });
     if (environments.length !== uniqueIds.length) {
@@ -65,7 +66,7 @@ export class PublishService {
       .map((environment) => environment.environmentName)
       .join(', ');
 
-    const version = await this.prisma.$transaction(async (tx) => {
+    const version = await this.prisma.$transaction(async (tx: PrismaTx) => {
       const created = await tx.applicationVersion.create({
         data: {
           applicationId,
@@ -107,7 +108,7 @@ export class PublishService {
       return created;
     });
 
-    const releases = await this.prisma.applicationRelease.findMany({
+    const releases: ReleaseWithEnvironment[] = await this.prisma.applicationRelease.findMany({
       where: { applicationId },
       include: {
         environment: { select: { name: true, isProduction: true } },
@@ -334,7 +335,7 @@ export class PublishService {
       throw new BadRequestException('Only an approved version can be deployed');
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx: PrismaTx) => {
       const application = await tx.application.findUniqueOrThrow({
         where: { id: version.applicationId },
         select: {
@@ -411,7 +412,7 @@ export class PublishService {
     });
     if (!target) throw new NotFoundException('Target version not found');
 
-    await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx: PrismaTx) => {
       const application = await tx.application.findUniqueOrThrow({
         where: { id: applicationId },
         select: {

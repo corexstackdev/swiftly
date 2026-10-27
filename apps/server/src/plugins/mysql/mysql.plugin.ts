@@ -134,7 +134,10 @@ export class MysqlPlugin implements DatasourcePlugin<MysqlConfig, QueryDefinitio
       });
 
       const columns: ColumnMetadata[] = Array.isArray(fields)
-        ? fields.map((field) => ({ name: field.name, dataType: String(field.type ?? '') }))
+        ? fields.map((field: { name: string; type?: unknown }) => ({
+            name: field.name,
+            dataType: String(field.type ?? ''),
+          }))
         : [];
 
       if (!Array.isArray(rows)) {

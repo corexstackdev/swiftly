@@ -56,7 +56,9 @@ export class AuthService {
 
     const membership =
       (organizationId
-        ? user.memberships.find((m) => m.organizationId === organizationId)
+        ? user.memberships.find(
+            (m: { organizationId: string }) => m.organizationId === organizationId,
+          )
         : undefined) ?? user.memberships[0]!;
 
     await this.prisma.user.update({
@@ -83,11 +85,13 @@ export class AuthService {
         name: membership.organization.name,
         slug: membership.organization.slug,
       },
-      availableOrganizations: user.memberships.map((m) => ({
-        id: m.organization.id,
-        name: m.organization.name,
-        slug: m.organization.slug,
-      })),
+      availableOrganizations: user.memberships.map(
+        (m: { organization: { id: string; name: string; slug: string } }) => ({
+          id: m.organization.id,
+          name: m.organization.name,
+          slug: m.organization.slug,
+        }),
+      ),
       permissions,
     };
   }

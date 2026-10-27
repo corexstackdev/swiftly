@@ -10,6 +10,7 @@ import {
 import { z } from 'zod';
 import type { ApplicationDsl } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import type { EnvRecord } from '../prisma/types';
 import { QueriesService } from '../queries/queries.service';
 import { Public } from '../common/decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -246,7 +247,7 @@ export class RuntimeController {
     });
     if (!application) throw new NotFoundException('Application not found');
 
-    const environments = await this.prisma.environment.findMany({
+    const environments: EnvRecord[] = await this.prisma.environment.findMany({
       where: { organizationId: application.workspace.organizationId },
     });
 
@@ -261,7 +262,7 @@ export class RuntimeController {
     if (requested.environmentName || requested.environmentId) {
       if (!requestedEnvironment) throw new NotFoundException('Unknown environment');
       const release = application.releases.find(
-        (entry) => entry.environmentId === requestedEnvironment.id,
+        (entry: { environmentId: string }) => entry.environmentId === requestedEnvironment.id,
       );
       if (!release) {
         throw new NotFoundException(
@@ -273,7 +274,9 @@ export class RuntimeController {
 
     const production = environments.find((entry) => entry.isProduction);
     const productionRelease = production
-      ? application.releases.find((entry) => entry.environmentId === production.id)
+      ? application.releases.find(
+          (entry: { environmentId: string }) => entry.environmentId === production.id,
+        )
       : undefined;
     if (productionRelease) {
       return {
@@ -284,7 +287,8 @@ export class RuntimeController {
     }
 
     const release = [...application.releases].sort(
-      (left, right) => right.publishedAt.getTime() - left.publishedAt.getTime(),
+      (left: { publishedAt: Date }, right: { publishedAt: Date }) =>
+        right.publishedAt.getTime() - left.publishedAt.getTime(),
     )[0];
 
     if (release) {
@@ -310,7 +314,7 @@ export class RuntimeController {
     requestedId?: string,
     productionFirst = false,
   ) {
-    const [environments, configs] = await Promise.all([
+    const [environments, configs]: [EnvRecord[], { environmentId: string }[]] = await Promise.all([
       this.prisma.environment.findMany({ where: { organizationId } }),
       this.prisma.datasourceConfig.findMany({
         where: { datasource: { organizationId } },

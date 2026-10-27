@@ -321,7 +321,7 @@ export class QueriesService {
 
     if (source === 'published') {
       const release = application.releases.find(
-        (entry) => entry.environmentId === environmentId,
+        (entry: { environmentId: string }) => entry.environmentId === environmentId,
       );
       if (!release) {
         throw new NotFoundException('This application has not been published to this environment');

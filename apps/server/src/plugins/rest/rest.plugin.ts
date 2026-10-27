@@ -391,7 +391,7 @@ function safeJsonParse(text: string): unknown {
 /** Normalises any JSON shape into rows so table widgets can bind to it directly. */
 function toRows(payload: unknown, maxRows: number): Record<string, unknown>[] {
   if (Array.isArray(payload)) {
-    return payload.slice(0, maxRows).map((item) =>
+    return (payload as unknown[]).slice(0, maxRows).map((item: unknown) =>
       item !== null && typeof item === 'object'
         ? (item as Record<string, unknown>)
         : { value: item },

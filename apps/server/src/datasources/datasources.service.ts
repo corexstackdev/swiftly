@@ -41,7 +41,15 @@ export class DatasourcesService {
   ) {}
 
   async list(organizationId: string, workspaceId?: string) {
-    const datasources = await this.prisma.datasource.findMany({
+    const datasources: Array<{
+      id: string;
+      name: string;
+      pluginId: string;
+      workspaceId: string | null;
+      readOnly: boolean;
+      schemaCachedAt: Date | null;
+      configs: { environmentId: string; publicConfig: unknown }[];
+    }> = await this.prisma.datasource.findMany({
       where: {
         organizationId,
         ...(workspaceId ? { OR: [{ workspaceId }, { workspaceId: null }] } : {}),
@@ -624,7 +632,21 @@ export class DatasourcesService {
   }
 
   private async requireDatasource(organizationId: string, datasourceId: string) {
-    const datasource = await this.prisma.datasource.findFirst({
+    const datasource: {
+      id: string;
+      name: string;
+      pluginId: string;
+      readOnly: boolean;
+      schemaCachedAt: Date | null;
+      schemaCache: unknown;
+      configs: {
+        environmentId: string;
+        encryptedConfig: string;
+        iv: string;
+        authTag: string;
+        publicConfig: unknown;
+      }[];
+    } | null = await this.prisma.datasource.findFirst({
       where: { id: datasourceId, organizationId },
       include: { configs: true },
     });
