@@ -4,6 +4,7 @@ import type { TabDefinition, WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { normaliseTabs } from '@/editor/TabListEditor';
 import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';
+import { IconGlyph } from '@/icons/IconGlyph';
 
 /**
  * Container widgets that do more than hold a grid.
@@ -226,7 +227,7 @@ function TabContent({ tab }: { tab: TabDefinition }) {
 
   return (
     <span className="flex items-center gap-1.5">
-      {mode !== 'text' && icon ? <span aria-hidden="true">{icon}</span> : null}
+      {mode !== 'text' && icon ? <IconGlyph name={icon} size={14} className="shrink-0" /> : null}
       {/* An icon-only tab still needs an accessible name, so the label stays in
           the DOM for screen readers rather than being dropped. */}
       {mode === 'icon' && icon ? (

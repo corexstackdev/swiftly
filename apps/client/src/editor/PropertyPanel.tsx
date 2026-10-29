@@ -17,6 +17,7 @@ import { asRows } from '@/widgets/coerce';
 import { Select, control, controlCompact, dashedButton, ghostButton } from './controls';
 import { jsCallBinding, jsObjectCompileErrors, listJsFunctions, pathFromJsCall } from './jsObjectOps';
 import { gridCanvasScale } from './gridCells';
+import { IconPicker } from '@/icons/IconPicker';
 
 /**
  * The property panel.
@@ -419,6 +420,46 @@ function PropertyPanelBody({
           </Section>
         )}
 
+        {parent?.type === 'accordion' && (
+          <Section title="Layout">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-600">Panel</span>
+              <Select
+                value={String(widget.properties.panelId ?? '')}
+                onChange={(next) => onChange('panelId', next)}
+              >
+                <option value="">First panel</option>
+                {tabsOf(parent, 'panels').map((tab) => (
+                  <option key={tab.id} value={tab.id}>
+                    {tab.label}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          </Section>
+        )}
+
+        {parent?.type === 'columns' && (
+          <Section title="Layout">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-600">Column</span>
+              <Select
+                value={String(widget.properties.column ?? 0)}
+                onChange={(next) => onChange('column', Number(next))}
+              >
+                {Array.from(
+                  { length: Math.max(2, Math.min(4, Number(parent.properties.count ?? 2) || 2)) },
+                  (_, index) => (
+                    <option key={index} value={String(index)}>
+                      Column {index + 1}
+                    </option>
+                  ),
+                )}
+              </Select>
+            </label>
+          </Section>
+        )}
+
         {sections.map((section) => (
           <Section key={section.name} title={section.name}>
             {section.properties.map((property) => (
@@ -810,6 +851,9 @@ function Control({
     case 'tab_list':
       return <TabListEditor tabs={normaliseTabs(value)} onChange={onChange} />;
 
+    case 'icon':
+      return <IconPicker value={value} onChange={(next) => onChange(next)} />;
+
     case 'spacing':
       return <SpacingEditor value={value} onChange={onChange} />;
 
@@ -1010,9 +1054,9 @@ function ValidationEditor({
 const NEEDS_VALUE = new Set(['minLength', 'maxLength', 'min', 'max', 'regex', 'custom', 'matchesField']);
 
 
-/** Reads the tab list off a Tabs container, tolerating a half-edited JSON value. */
-function tabsOf(parent: WidgetDsl): { id: string; label: string }[] {
-  const raw = parent.properties.tabs;
+/** Reads the tab/panel list off a container, tolerating a half-edited JSON value. */
+function tabsOf(parent: WidgetDsl, key: string = 'tabs'): { id: string; label: string }[] {
+  const raw = parent.properties[key];
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((entry, index) => {
     if (entry === null || typeof entry !== 'object') return [];

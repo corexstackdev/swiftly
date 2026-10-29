@@ -1,9 +1,11 @@
 import type {
   ApplicationDsl,
+  AppLayoutId,
   ColumnPatch,
   ColumnSpec,
   CreateTableInput,
   DbSchema,
+  PageLayoutId,
   QueryResult,
   TableRowsPage,
   TestResult,
@@ -234,8 +236,14 @@ export const api = {
   applications: {
     list: () => request<ApplicationSummary[]>('/applications'),
     get: (id: string) => request<ApplicationDetail>(`/applications/${id}`),
-    create: (input: { workspaceId: string; name: string; slug: string; description?: string }) =>
-      post<ApplicationSummary>('/applications', input),
+    create: (input: {
+      workspaceId: string;
+      name: string;
+      slug: string;
+      description?: string;
+      navStyle?: AppLayoutId;
+      pageLayout?: PageLayoutId;
+    }) => post<ApplicationSummary>('/applications', input),
     saveDraft: (id: string, dsl: ApplicationDsl, expectedRevision: number) =>
       put<{ revision: number; updatedAt: string }>(`/applications/${id}/draft`, {
         dsl,

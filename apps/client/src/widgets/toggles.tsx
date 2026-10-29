@@ -5,6 +5,7 @@ import type { RegisteredWidget, WidgetProps } from './types';
 import { useSeededValue } from './useSeededValue';
 import { FieldLabel, labelProperties } from './FieldLabel';
 import { textStyleProperties, textStyleToCss } from './textStyle';
+import { spacingToCss } from '@/editor/SpacingEditor';
 import {
   CHOICE_SOURCE_PROPERTIES,
   choiceSourceError,
@@ -105,6 +106,25 @@ function optionsRowStyle(horizontal: boolean): CSSProperties {
   };
 }
 
+/**
+ * Where the option list sits in the leftover height under the field label.
+ *
+ * Auto margins, not `justify-content`: a centred flex item that overflows is
+ * clipped at both ends, so the first checkboxes disappear. Auto margins collapse
+ * when the list is taller than the box, and scrolling still starts at the top.
+ */
+function optionListPlacement(properties: Record<string, unknown>): CSSProperties {
+  const align = String(properties.verticalAlign ?? 'top');
+  return {
+    flexShrink: 0,
+    ...(align === 'middle'
+      ? { marginTop: 'auto', marginBottom: 'auto' }
+      : align === 'bottom'
+        ? { marginTop: 'auto' }
+        : {}),
+  };
+}
+
 const DIRECTION_PROPERTY = {
   key: 'direction',
   label: 'Direction',
@@ -118,6 +138,34 @@ const DIRECTION_PROPERTY = {
   ],
   helpText: 'Vertical stacks the choices. Horizontal puts them in a row.',
 };
+
+const OPTION_LAYOUT_PROPERTIES = [
+  DIRECTION_PROPERTY,
+  {
+    key: 'padding',
+    label: 'Padding',
+    control: 'spacing' as const,
+    expectedType: 'any' as const,
+    bindable: false,
+    defaultValue: 0,
+    helpText:
+      'Space around the checkboxes. Unlink to set the top independently of the other sides.',
+  },
+  {
+    key: 'verticalAlign',
+    label: 'Vertical align',
+    control: 'select' as const,
+    expectedType: 'string' as const,
+    bindable: false,
+    defaultValue: 'top',
+    options: [
+      { value: 'top', label: 'Top' },
+      { value: 'middle', label: 'Middle' },
+      { value: 'bottom', label: 'Bottom' },
+    ],
+    helpText: 'Where the checkboxes sit in the leftover height. Middle centres them.',
+  },
+];
 
 const CHECKBOX_STYLE = styleSections('Checkbox');
 const SWITCH_STYLE = styleSections('Enabled');
@@ -361,7 +409,7 @@ function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetP
   };
 
   return (
-    <div className="flex h-full w-full flex-col gap-1 overflow-auto">
+    <div className="flex h-full w-full flex-col gap-1 overflow-hidden">
       <FieldLabel
         as="span"
         text={properties.label}
@@ -370,34 +418,41 @@ function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetP
         style={textStyleToCss(properties, 'label')}
       />
 
-      <div className="min-w-0" style={optionsRowStyle(horizontal)}>
-        {options.map((option, index) => (
-          <label
-            key={index}
-            className={clsx('flex cursor-pointer items-center gap-2', horizontal && 'shrink-0')}
-          >
-            <input
-              type="checkbox"
-              checked={selected.includes(option.value)}
-              disabled={Boolean(properties.disabled)}
-              onChange={() => toggle(option.value)}
-              style={{ accentColor: accentOf(properties) }}
-              className="no-drag h-4 w-4 shrink-0 accent-blue-600"
-            />
-            <span
-              className={horizontal ? 'whitespace-nowrap' : 'min-w-0 truncate'}
-              style={optionStyle}
-            >
-              {option.label}
-            </span>
-          </label>
-        ))}
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto"
+        style={{ padding: spacingToCss(properties.padding, 0) }}
+      >
+        <div className="min-w-0" style={optionListPlacement(properties)}>
+          <div className="min-w-0" style={optionsRowStyle(horizontal)}>
+            {options.map((option, index) => (
+              <label
+                key={index}
+                className={clsx('flex cursor-pointer items-center gap-2', horizontal && 'shrink-0')}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.includes(option.value)}
+                  disabled={Boolean(properties.disabled)}
+                  onChange={() => toggle(option.value)}
+                  style={{ accentColor: accentOf(properties) }}
+                  className="no-drag h-4 w-4 shrink-0 accent-blue-600"
+                />
+                <span
+                  className={horizontal ? 'whitespace-nowrap' : 'min-w-0 truncate'}
+                  style={optionStyle}
+                >
+                  {option.label}
+                </span>
+              </label>
+            ))}
 
-        {options.length === 0 && !dataError && (
-          <span className="text-xs text-slate-400">{emptyChoiceHint(properties)}</span>
-        )}
+            {options.length === 0 && !dataError && (
+              <span className="text-xs text-slate-400">{emptyChoiceHint(properties)}</span>
+            )}
+          </div>
+          {dataError ? <p className="mt-1 text-xs text-red-600">{dataError}</p> : null}
+        </div>
       </div>
-      {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
     </div>
   );
 }
@@ -419,7 +474,7 @@ export const checkboxGroupWidget: RegisteredWidget = {
         name: 'Content',
         properties: [
           ...CHECKS_STYLE.content,
-          DIRECTION_PROPERTY,
+          ...OPTION_LAYOUT_PROPERTIES,
         ],
       },
       ...CHECKS_STYLE.sections,

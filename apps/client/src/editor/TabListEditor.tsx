@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import clsx from 'clsx';
 import type { TabDefinition, TabDisplayMode, TabStateStyle } from '@swiftly/shared';
+import { IconPicker } from '@/icons/IconPicker';
 
 /**
  * Editor for a Tabs widget's tab list.
@@ -163,12 +164,11 @@ function TabSettings({
       </Field>
 
       {(tab.display ?? 'text') !== 'text' && (
-        <Field label="Icon" help="An emoji or a single character">
-          <input
+        <Field label="Icon" help="A React icon or an emoji">
+          <IconPicker
+            compact
             value={tab.icon ?? ''}
-            onChange={(event) => onChange({ icon: event.target.value })}
-            placeholder="📊"
-            className="w-16 rounded border border-slate-300 px-1.5 py-1 text-center text-xs text-slate-800 outline-none focus:border-blue-500"
+            onChange={(next) => onChange({ icon: next })}
           />
         </Field>
       )}

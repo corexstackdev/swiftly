@@ -49,18 +49,23 @@ export function RuntimeApp({
       <AppShell
         navigation={dsl.navigation}
         runtime={runtime}
+        theme={dsl.theme}
         header={
-          <div className="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
-            <span className="text-sm font-semibold text-slate-800">{name}</span>
-            {subtitle && <span className="text-[11px] text-slate-400">{subtitle}</span>}
-            <span className="ml-auto flex items-center gap-3 text-xs text-slate-500">
-              {trailing}
-              {currentUser?.name}
-            </span>
-          </div>
+          source === 'published' ? undefined : (
+            <div className="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+              <span className="text-sm font-semibold text-slate-800">{name}</span>
+              {subtitle && <span className="text-[11px] text-slate-400">{subtitle}</span>}
+              <span className="ml-auto flex items-center gap-3 text-xs text-slate-500">
+                {trailing}
+                {currentUser?.name}
+              </span>
+            </div>
+          )
         }
       >
-        {runtime.page && <PageRenderer widgets={runtime.page.widgets} runtime={runtime} />}
+        {runtime.page && (
+          <PageRenderer widgets={runtime.page.widgets} runtime={runtime} isRoot />
+        )}
       </AppShell>
     </div>
   );

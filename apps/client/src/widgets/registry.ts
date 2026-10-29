@@ -9,6 +9,13 @@ import { listWidget } from './ListWidget';
 import { selectWidget } from './SelectWidget';
 import { chartWidget } from './ChartWidget';
 import { modalWidget, tabsWidget } from './layout';
+import {
+  accordionWidget,
+  cardWidget,
+  columnsWidget,
+  drawerWidget,
+  stackWidget,
+} from './structure';
 import { gridWidget } from './GridWidget';
 import { navbarWidget, navLinkWidget, navMenuWidget } from './NavbarWidget';
 import {
@@ -21,6 +28,7 @@ import { datePickerWidget, numberInputWidget, currencyInputWidget, sliderWidget 
 import {
   dividerWidget,
   iframeWidget,
+  iconWidget,
   imageWidget,
   progressWidget,
   ratingWidget,
@@ -43,9 +51,14 @@ function register(widget: RegisteredWidget): void {
 
 // Layout
 register(containerWidget);
+register(cardWidget);
+register(stackWidget);
+register(columnsWidget);
 register(gridWidget);
 register(tabsWidget);
+register(accordionWidget);
 register(modalWidget);
+register(drawerWidget);
 register(navbarWidget);
 register(navMenuWidget);
 register(navLinkWidget);
@@ -72,6 +85,7 @@ register(textWidget);
 register(tableWidget);
 register(listWidget);
 register(statsBoxWidget);
+register(iconWidget);
 register(progressWidget);
 register(ratingWidget);
 register(iframeWidget);

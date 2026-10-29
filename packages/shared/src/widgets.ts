@@ -17,6 +17,7 @@ export type PropertyControl =
   | 'select'
   | 'toggle'
   | 'color'
+  | 'icon'
   | 'code'
   | 'spacing'
   | 'action_list'

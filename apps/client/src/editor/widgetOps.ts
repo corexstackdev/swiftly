@@ -173,6 +173,25 @@ export function requiredContainerHeight(container: WidgetDsl): number {
   // A navbar or menu lays children in document order; growing to nested
   // coordinate boxes would stretch the bar around a dropdown that overlays it.
   if (definition?.childLayout === 'flow') {
+    if (container.type === 'stack' && container.properties.direction !== 'row') {
+      const gap = Number(container.properties.gap ?? 12);
+      const contentPx =
+        children.reduce((total, child) => total + child.layout.h * CANVAS_ROW_PITCH, 0) +
+        Math.max(0, children.length - 1) * gap;
+      return Math.max(minimum, Math.ceil(contentPx / CANVAS_ROW_PITCH) + chrome);
+    }
+    if (container.type === 'columns') {
+      const count = Math.max(2, Math.min(4, Number(container.properties.count ?? 2) || 2));
+      const tallest = Math.max(
+        0,
+        ...Array.from({ length: count }, (_, index) =>
+          children
+            .filter((child) => Number(child.properties.column ?? 0) === index)
+            .reduce((total, child) => total + child.layout.h, 0),
+        ),
+      );
+      return Math.max(minimum, tallest + chrome);
+    }
     return Math.max(minimum, container.layout.h);
   }
 
@@ -247,4 +266,31 @@ export function needsContainerFit(page: PageDsl): boolean {
 
 export function newWidgetId(): string {
   return `w_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Properties a newly dropped child inherits from its container: which tab,
+ * panel, or column it landed on.
+ */
+export function seedForContainer(
+  parent: WidgetDsl | undefined,
+  seed: Record<string, unknown> | undefined,
+  widgetState: Record<string, Record<string, unknown>>,
+): Record<string, unknown> | undefined {
+  const next: Record<string, unknown> = { ...seed };
+  if (!parent) return Object.keys(next).length > 0 ? next : undefined;
+
+  if (parent.type === 'tabs' && next.tabId === undefined) {
+    const active = widgetState[parent.name]?.activeTab;
+    if (typeof active === 'string' && active) next.tabId = active;
+  }
+  if (parent.type === 'accordion' && next.panelId === undefined) {
+    const active = widgetState[parent.name]?.activePanel;
+    if (typeof active === 'string' && active) next.panelId = active;
+  }
+  if (parent.type === 'columns' && next.column === undefined) {
+    next.column = 0;
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
 }

@@ -38,19 +38,22 @@ export function PageRenderer({
   widgets,
   runtime,
   isDesignMode = false,
+  isRoot = false,
 }: {
   widgets: WidgetDsl[];
   runtime: AppRuntime;
   isDesignMode?: boolean;
+  /** Page-level grid only. Nested container grids must stay transparent. */
+  isRoot?: boolean;
 }) {
   // A modal is positioned by its own overlay, not by the grid, so it renders
   // outside the grid flow; leaving it in would reserve a hole where it sits.
-  const modals = widgets.filter((widget) => widget.type === 'modal');
-  const positioned = widgets.filter((widget) => widget.type !== 'modal');
+  const overlays = widgets.filter((widget) => widget.type === 'modal' || widget.type === 'drawer');
+  const positioned = widgets.filter((widget) => widget.type !== 'modal' && widget.type !== 'drawer');
 
   return (
     <div
-      className="relative grid w-full"
+      className={clsx('relative grid w-full', isRoot && 'min-h-full bg-white')}
       style={{
         gridTemplateColumns: `repeat(${GRID_COLUMNS}, minmax(0, 1fr))`,
         gridAutoRows: `${GRID_ROW_HEIGHT}px`,
@@ -67,13 +70,14 @@ export function PageRenderer({
           className={clsx(
             'min-w-0',
             (widget.type === 'navbar' || widget.type === 'nav_menu') && 'z-[5] overflow-visible',
+            widget.type === 'drawer' && 'z-[6]',
           )}
         >
           <WidgetHost widget={widget} runtime={runtime} isDesignMode={isDesignMode} />
         </div>
       ))}
 
-      {modals.map((widget) => (
+      {overlays.map((widget) => (
         <WidgetHost
           key={widget.id}
           widget={widget}

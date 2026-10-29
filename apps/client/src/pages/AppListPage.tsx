@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
+import {
+  DEFAULT_APP_LAYOUT,
+  DEFAULT_PAGE_LAYOUT,
+  type AppLayoutId,
+  type PageLayoutId,
+} from '@swiftly/shared';
 import { api, type ApplicationReleaseSummary, type ApplicationSummary, type Workspace } from '@/lib/api';
+import { AppLayoutPicker, PageLayoutPicker } from '@/editor/LayoutOptions';
 import { useSession } from '@/lib/session';
 import { AppHeader } from '@/shell/AppHeader';
 import { formatAbsolute, formatRelative } from '@/lib/relativeTime';
@@ -41,7 +49,7 @@ const GRID_CLASSES =
   'grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 min-[1900px]:grid-cols-6';
 
 const LIST_CLASSES =
-  'divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white';
+  'divide-y divide-slate-200 overflow-visible rounded-lg border border-slate-200 bg-white';
 
 export function AppListPage() {
   const { can } = useSession();
@@ -354,14 +362,17 @@ function AppEntry({
 
   if (view === 'list') {
     return (
-      <div className="group relative flex items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-slate-50 focus-within:bg-slate-50">
+      <div className="group relative z-0 flex items-center gap-3 px-3.5 py-2.5 first:rounded-t-lg last:rounded-b-lg transition-colors hover:bg-slate-50 focus-within:bg-slate-50 has-[[aria-expanded=true]]:z-30">
         <AppMark app={app} />
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="min-w-0 truncate text-xs font-semibold text-slate-900">
               {target ? (
-                <Link to={target} className="after:absolute after:inset-0 hover:text-blue-700">
+                <Link
+                  to={target}
+                  className="after:absolute after:inset-0 after:z-0 hover:text-blue-700"
+                >
                   {app.name}
                 </Link>
               ) : (
@@ -396,14 +407,17 @@ function AppEntry({
   }
 
   return (
-    <article className="group relative flex flex-col rounded-lg border border-slate-200 bg-white p-4 transition-all hover:border-slate-300 hover:shadow-md focus-within:border-blue-400">
+    <article className="group relative z-0 flex flex-col rounded-lg border border-slate-200 bg-white p-4 transition-all hover:border-slate-300 hover:shadow-md focus-within:border-blue-400 has-[[aria-expanded=true]]:z-30">
       <div className="flex items-start gap-3">
         <AppMark app={app} />
 
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold text-slate-900">
             {target ? (
-              <Link to={target} className="after:absolute after:inset-0 hover:text-blue-700">
+              <Link
+                to={target}
+                className="after:absolute after:inset-0 after:z-0 hover:text-blue-700"
+              >
                 {app.name}
               </Link>
             ) : (
@@ -522,19 +536,57 @@ function EntryMenu({
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const close = (): void => {
     setOpen(false);
     setConfirming(false);
     setCopied(false);
+    setCoords(null);
   };
+
+  const placeMenu = useCallback(() => {
+    const button = buttonRef.current;
+    const menu = menuRef.current;
+    if (!button || !menu) return;
+
+    const rect = button.getBoundingClientRect();
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const gutter = 8;
+    const gap = 4;
+
+    let left = rect.right - width;
+    left = Math.min(Math.max(gutter, left), window.innerWidth - width - gutter);
+
+    const below = rect.bottom + gap;
+    const above = rect.top - gap - height;
+    const top =
+      below + height > window.innerHeight - gutter && above >= gutter ? above : below;
+
+    setCoords({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+    window.addEventListener('scroll', placeMenu, true);
+    return () => {
+      window.removeEventListener('resize', placeMenu);
+      window.removeEventListener('scroll', placeMenu, true);
+    };
+  }, [open, confirming, copied, placeMenu]);
 
   useEffect(() => {
     if (!open) return;
 
     const onPointerDown = (event: MouseEvent): void => {
-      if (!containerRef.current?.contains(event.target as Node)) close();
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
     };
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') close();
@@ -560,93 +612,108 @@ function EntryMenu({
   };
 
   return (
-    <div ref={containerRef} className="relative">
+    <div className="relative">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (open) close();
+          else setOpen(true);
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Actions for ${app.name}`}
         className={clsx(
-          'rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600',
+          'relative z-10 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600',
           open && 'bg-slate-100 text-slate-600',
         )}
       >
         <MoreIcon />
       </button>
 
-      {open && (
-        <div
-          role="menu"
-          className="absolute top-full right-0 z-50 mt-1 w-56 rounded-md border border-slate-200 bg-white py-1 text-left shadow-lg"
-        >
-          {confirming ? (
-            <div className="px-3 py-2">
-              <p className="text-xs font-medium text-slate-900">Delete “{app.name}”?</p>
-              <p className="mt-1 text-[11px] text-slate-500">
-                Its pages, queries and published versions go with it. This cannot be undone.
-              </p>
-              <div className="mt-2.5 flex gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    close();
-                    onDelete();
-                  }}
-                  className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-700"
-                >
-                  Delete
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  className="rounded px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {can('app:edit') && (
-                <MenuLink to={editorPath} onNavigate={close}>
-                  Open in editor
-                </MenuLink>
-              )}
-              {publishedReleases.length > 0 && workspaceSlug ? (
-                publishedReleases.map((release) => (
-                  <MenuLink
-                    key={release.environmentId}
-                    to={publishedAppPath(workspaceSlug, app.slug, release.environmentName)}
-                    onNavigate={close}
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            style={{
+              position: 'fixed',
+              top: coords?.top ?? 0,
+              left: coords?.left ?? 0,
+              visibility: coords ? 'visible' : 'hidden',
+            }}
+            className="z-[80] w-56 rounded-md border border-slate-200 bg-white py-1 text-left shadow-lg"
+          >
+            {confirming ? (
+              <div className="px-3 py-2">
+                <p className="text-xs font-medium text-slate-900">Delete “{app.name}”?</p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Its pages, queries and published versions go with it. This cannot be undone.
+                </p>
+                <div className="mt-2.5 flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close();
+                      onDelete();
+                    }}
+                    className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-700"
                   >
-                    Open {release.environmentName}
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirming(false)}
+                    className="rounded px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {can('app:edit') && (
+                  <MenuLink to={editorPath} onNavigate={close}>
+                    Open in editor
                   </MenuLink>
-                ))
-              ) : publishedPath ? (
-                <MenuLink to={publishedPath} onNavigate={close}>
-                  Open published app
-                </MenuLink>
-              ) : (
-                <p className="px-3 py-1.5 text-xs text-slate-300">Not published yet</p>
-              )}
+                )}
+                {publishedReleases.length > 0 && workspaceSlug ? (
+                  publishedReleases.map((release) => (
+                    <MenuLink
+                      key={release.environmentId}
+                      to={publishedAppPath(workspaceSlug, app.slug, release.environmentName)}
+                      onNavigate={close}
+                    >
+                      Open {release.environmentName}
+                    </MenuLink>
+                  ))
+                ) : publishedPath ? (
+                  <MenuLink to={publishedPath} onNavigate={close}>
+                    Open published app
+                  </MenuLink>
+                ) : (
+                  <p className="px-3 py-1.5 text-xs text-slate-300">Not published yet</p>
+                )}
 
-              <MenuButton onClick={() => void copyLink()}>
-                {copied ? 'Link copied' : 'Copy link'}
-              </MenuButton>
+                <MenuButton onClick={() => void copyLink()}>
+                  {copied ? 'Link copied' : 'Copy link'}
+                </MenuButton>
 
-              {can('app:delete') && (
-                <>
-                  <div className="my-1 border-t border-slate-100" />
-                  <MenuButton danger onClick={() => setConfirming(true)}>
-                    Delete…
-                  </MenuButton>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
+                {can('app:delete') && (
+                  <>
+                    <div className="my-1 border-t border-slate-100" />
+                    <MenuButton danger onClick={() => setConfirming(true)}>
+                      Delete…
+                    </MenuButton>
+                  </>
+                )}
+              </>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -718,6 +785,8 @@ function CreateDialog({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [workspaceId, setWorkspaceId] = useState(workspaces[0]?.id ?? '');
+  const [navStyle, setNavStyle] = useState<AppLayoutId>(DEFAULT_APP_LAYOUT);
+  const [pageLayout, setPageLayout] = useState<PageLayoutId>(DEFAULT_PAGE_LAYOUT);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -744,6 +813,8 @@ function CreateDialog({
         name: name.trim(),
         slug,
         description: description.trim() || undefined,
+        navStyle,
+        pageLayout,
       });
       onCreated(app);
     } catch (caught) {
@@ -764,16 +835,16 @@ function CreateDialog({
         role="dialog"
         aria-modal="true"
         aria-label="New application"
-        className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-xl"
+        className="w-full max-w-xl rounded-lg border border-slate-200 bg-white shadow-xl"
       >
         <div className="border-b border-slate-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-900">New application</h2>
           <p className="mt-0.5 text-[11px] text-slate-500">
-            It starts as a draft. Nobody outside the builders sees it until IT publishes it.
+            Pick the chrome and the first page. Nobody outside the builders sees it until IT publishes it.
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 px-4 py-4">
+        <div className="flex max-h-[min(36rem,calc(100vh-12rem))] flex-col gap-4 overflow-y-auto px-4 py-4">
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-slate-700">Name</span>
             <input
@@ -823,6 +894,22 @@ function CreateDialog({
               </select>
             </label>
           )}
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-700">App layout</span>
+            <p className="text-[11px] text-slate-400">
+              The chrome around every page. You can change it later.
+            </p>
+            <AppLayoutPicker value={navStyle} onChange={setNavStyle} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-700">Home page</span>
+            <p className="text-[11px] text-slate-400">
+              Starting widgets on the first page. Blank if you want to drag them on yourself.
+            </p>
+            <PageLayoutPicker value={pageLayout} onSelect={setPageLayout} />
+          </div>
 
           {error && (
             <p className="rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">

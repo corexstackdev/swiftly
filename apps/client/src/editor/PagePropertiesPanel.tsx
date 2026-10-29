@@ -1,9 +1,17 @@
 import clsx from 'clsx';
-import { isAppLevelEntity, type ApplicationDsl, type PageDsl } from '@swiftly/shared';
+import {
+  isAppLevelEntity,
+  type ApplicationDsl,
+  type AppLayoutId,
+  type PageDsl,
+  type PageLayoutId,
+} from '@swiftly/shared';
 import {
   pageQueryVariableOverrides,
   setPageQueryVariableValue,
 } from '@/evaluation/queryVariables';
+import { NavItemsEditor } from './NavItemsEditor';
+import { AppLayoutPicker, PageLayoutPicker } from './LayoutOptions';
 
 /**
  * Shown when no widget is selected.
@@ -30,6 +38,7 @@ export function PagePropertiesPanel({
   onCanvasPresetChange,
   onPageChange,
   onAppChange,
+  onApplyPageLayout,
 }: {
   dsl: ApplicationDsl;
   page: PageDsl | undefined;
@@ -37,6 +46,7 @@ export function PagePropertiesPanel({
   onCanvasPresetChange: (preset: CanvasPresetId) => void;
   onPageChange: (mutate: (page: PageDsl) => void, label?: string) => void;
   onAppChange: (mutate: (dsl: ApplicationDsl) => void, label?: string) => void;
+  onApplyPageLayout: (layout: PageLayoutId) => void;
 }) {
   return (
     <div className="flex h-full flex-col overflow-auto">
@@ -117,22 +127,25 @@ export function PagePropertiesPanel({
 
       {page && <PageQueryInputs dsl={dsl} page={page} onPageChange={onPageChange} />}
 
-      <Section title="Navigation">
-        <Field label="Style">
-          <select
-            value={dsl.navigation.style}
-            onChange={(event) =>
-              onAppChange((draft) => {
-                draft.navigation.style = event.target.value as 'sidebar' | 'topbar' | 'none';
-              }, 'nav-style')
-            }
-            className={inputClass}
-          >
-            <option value="sidebar">Sidebar</option>
-            <option value="topbar">Top bar</option>
-            <option value="none">None</option>
-          </select>
-        </Field>
+      {page && (
+        <Section title="Page layout">
+          <p className="text-[11px] text-slate-400">
+            Replaces the widgets on this page. Undo brings the previous ones back.
+          </p>
+          <PageLayoutPicker size="sm" onSelect={onApplyPageLayout} />
+        </Section>
+      )}
+
+      <Section title="App layout">
+        <AppLayoutPicker
+          size="sm"
+          value={dsl.navigation.style}
+          onChange={(style: AppLayoutId) =>
+            onAppChange((draft) => {
+              draft.navigation.style = style;
+            }, 'nav-style')
+          }
+        />
 
         <Field label="Title">
           <input
@@ -145,6 +158,14 @@ export function PagePropertiesPanel({
             className={inputClass}
           />
         </Field>
+
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-slate-600">Links</span>
+          <p className="text-[11px] text-slate-400">
+            Items in the app sidebar or top bar. Click them on the canvas to switch pages.
+          </p>
+          <NavItemsEditor dsl={dsl} onChange={onAppChange} />
+        </div>
       </Section>
 
       <Section title="Theme">

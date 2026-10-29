@@ -2,7 +2,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import { jsObjectsOnPage, queriesOnPage, type ApplicationDsl, type PageDsl, type QueryEntity, type WidgetDefinition, type WidgetDsl } from '@swiftly/shared';
+import {
+  jsObjectsOnPage,
+  queriesOnPage,
+  widgetsForPageLayout,
+  type ApplicationDsl,
+  type AppLayoutId,
+  type PageDsl,
+  type PageLayoutId,
+  type QueryEntity,
+  type WidgetDefinition,
+  type WidgetDsl,
+} from '@swiftly/shared';
 import {
   api,
   type ApplicationReleaseSummary,
@@ -20,7 +31,9 @@ import { GRID_COLUMNS } from '@/runtime/PageRenderer';
 import { isFixedModal, modalRowsFromHeightPx } from '@/widgets/layout';
 import { useDslHistory } from './useDslHistory';
 import { Canvas } from './Canvas';
-import { acceptPaletteDrag, dropParentId, takePaletteDrop } from './paletteDrag';
+import { acceptPaletteDrag, dropParentId, dropSeed, takePaletteDrop } from './paletteDrag';
+import { DESIGN_SIDEBAR_WIDTH, DesignAppFrame } from './DesignAppFrame';
+import { AppLayoutToggle } from './LayoutOptions';
 import { EntityPanel } from './EntityPanel';
 import { PagesDropdown } from './PagesDropdown';
 import { PropertyPanel } from './PropertyPanel';
@@ -47,6 +60,7 @@ import {
   uniqueName,
   uniqueSlug,
   uniqueWidgetName,
+  seedForContainer,
 } from './widgetOps';
 import { FormTableImportDialog, type FormImportRequest } from './FormTableImportDialog';
 import {
@@ -435,6 +449,10 @@ function EditorBody({
    */
   const canvasWidth =
     presetWidth ?? Math.max(availableWidth - CANVAS_GUTTER * 2, MIN_CANVAS_WIDTH);
+  const showDesignSidebar = history.dsl.navigation.style === 'sidebar';
+  const gridWidth = showDesignSidebar
+    ? Math.max(MIN_CANVAS_WIDTH, canvasWidth - DESIGN_SIDEBAR_WIDTH)
+    : canvasWidth;
 
   useLayoutEffect(() => {
     const element = canvasHostRef.current;
@@ -619,6 +637,22 @@ function EditorBody({
     [history, currentPageId],
   );
 
+  const applyPageLayout = useCallback(
+    (layout: PageLayoutId) => {
+      const prefix = `w_${Math.random().toString(36).slice(2, 8)}`;
+      updatePage((target) => {
+        target.widgets = widgetsForPageLayout(layout, {
+          appName: history.dsl.name,
+          pageName: target.name,
+          pageId: target.id,
+          prefix,
+        });
+      }, 'page-layout');
+      setSelectedWidgetId(null);
+    },
+    [history.dsl.name, updatePage],
+  );
+
   const deleteWidget = useCallback(
     (widgetId: string) => {
       updatePage((target) => {
@@ -675,7 +709,12 @@ function EditorBody({
   }, [deleteWidget, history, save, selectedWidgetId]);
 
   const addWidget = useCallback(
-    (parentId: string | null, type: string, position: { x: number; y: number }) => {
+    (
+      parentId: string | null,
+      type: string,
+      position: { x: number; y: number },
+      seed?: Record<string, unknown>,
+    ) => {
       const definition = getWidgetDefinition(type);
       if (!definition) return;
 
@@ -690,6 +729,8 @@ function EditorBody({
       updatePage((target) => {
         const siblings = childListOf(target, parentId);
         if (!siblings) return;
+        const parent = parentId ? findWidget(target.widgets, parentId) : undefined;
+        const seeded = seedForContainer(parent, seed, runtime.widgetState);
 
         const widget: WidgetDsl = {
           id,
@@ -708,7 +749,7 @@ function EditorBody({
               definition.defaultLayout.h,
             ),
           },
-          properties: cellAwareProperties(target, parentId, siblings, definition, undefined),
+          properties: cellAwareProperties(target, parentId, siblings, definition, seeded),
           ...(definition.isContainer ? { children: [] } : {}),
         };
         siblings.push(widget);
@@ -716,7 +757,7 @@ function EditorBody({
 
       setSelectedWidgetId(id);
     },
-    [updatePage],
+    [runtime.widgetState, updatePage],
   );
 
   /**
@@ -734,13 +775,15 @@ function EditorBody({
       updatePage((target) => {
         const siblings = childListOf(target, parentId);
         if (!siblings) return;
+        const parent = findWidget(target.widgets, parentId);
+        const seeded = seedForContainer(parent, seedProperties, runtime.widgetState);
 
         const widget: WidgetDsl = {
           id,
           name: uniqueWidgetName(definition.displayName.replace(/\s+/g, ''), target),
           type,
           layout: { ...definition.defaultLayout },
-          properties: cellAwareProperties(target, parentId, siblings, definition, seedProperties),
+          properties: cellAwareProperties(target, parentId, siblings, definition, seeded),
           ...(definition.isContainer ? { children: [] } : {}),
         };
         siblings.push(widget);
@@ -748,7 +791,7 @@ function EditorBody({
 
       setSelectedWidgetId(id);
     },
-    [updatePage],
+    [runtime.widgetState, updatePage],
   );
 
   const importFormFromTable = useCallback(
@@ -1019,6 +1062,14 @@ function EditorBody({
               if (currentPageId === pageId) setCurrentPageId(remaining[0]?.id ?? '');
             }}
           />
+          <AppLayoutToggle
+            value={history.dsl.navigation.style}
+            onChange={(style: AppLayoutId) =>
+              history.update((draft) => {
+                draft.navigation.style = style;
+              }, 'nav-style')
+            }
+          />
 
           <span className="mx-1 text-xs text-slate-200">|</span>
           <span className="text-xs text-slate-500">{appName}</span>
@@ -1266,7 +1317,7 @@ function EditorBody({
               onDrop={(event) => {
                 const type = takePaletteDrop(event);
                 if (!type) return;
-                addWidget(dropParentId(event), type, { x: 0, y: 0 });
+                addWidget(dropParentId(event), type, { x: 0, y: 0 }, dropSeed(event));
               }}
             >
               {/* Left-aligned, not centred: the canvas starts where the panel ends
@@ -1277,28 +1328,38 @@ function EditorBody({
                   The frame is exactly as wide as the grid inside it — clamping the
                   frame while the grid rendered at the target width left widgets
                   spilling past the edge of the page they are supposedly on. */}
-              <div
-                className="min-h-full border-slate-200 bg-white"
-                style={{ width: canvasWidth }}
-              >
-                {page && (
-                  <Canvas
-                    page={page}
-                    runtime={runtime}
-                    width={canvasWidth}
-                    fitVersion={fitVersion}
-                    handlers={{
-                      selectedWidgetId,
-                      onSelect: setSelectedWidgetId,
-                      onLayoutChange: applyLayout,
-                      onDropWidget: addWidget,
-                      onDropIntoContainer: addWidgetToContainer,
-                      onUpdateProperties: updateWidgetProperties,
-                      onDelete: deleteWidget,
-                      onImportFormFromTable: setFormImportId,
-                    }}
-                  />
-                )}
+              <div className="min-h-full" style={{ width: canvasWidth }}>
+                <DesignAppFrame
+                  navigation={history.dsl.navigation}
+                  pages={history.dsl.pages}
+                  currentPageId={currentPageId}
+                  theme={history.dsl.theme}
+                  sidebarWidth={DESIGN_SIDEBAR_WIDTH}
+                  onNavigate={(pageId) => {
+                    setCurrentPageId(pageId);
+                    setSelectedWidgetId(null);
+                  }}
+                >
+                  {page && (
+                    <Canvas
+                      page={page}
+                      runtime={runtime}
+                      width={gridWidth}
+                      fitVersion={fitVersion}
+                      handlers={{
+                        selectedWidgetId,
+                        onSelect: setSelectedWidgetId,
+                        onLayoutChange: applyLayout,
+                        onDropWidget: addWidget,
+                        onDropIntoContainer: addWidgetToContainer,
+                        onUpdateProperties: updateWidgetProperties,
+                        onDelete: deleteWidget,
+                        onImportFormFromTable: setFormImportId,
+                        onApplyPageLayout: applyPageLayout,
+                      }}
+                    />
+                  )}
+                </DesignAppFrame>
               </div>
             </div>
 
@@ -1512,6 +1573,7 @@ function EditorBody({
                 onCanvasPresetChange={setCanvasPreset}
                 onPageChange={updatePage}
                 onAppChange={history.update}
+                onApplyPageLayout={applyPageLayout}
               />
             )}
           </aside>

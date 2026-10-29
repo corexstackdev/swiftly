@@ -1,6 +1,5 @@
 import { HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import type { ApplicationDsl } from '@swiftly/shared';
-import { DSL_VERSION } from '@swiftly/shared';
+import { emptyDsl, type ApplicationDsl, type AppLayoutId, type PageLayoutId } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ReleaseWithEnvironment } from '../prisma/types';
 import { AuditService } from '../audit/audit.service';
@@ -83,7 +82,14 @@ export class ApplicationsService {
   async create(
     organizationId: string,
     userId: string,
-    input: { workspaceId: string; name: string; slug: string; description?: string },
+    input: {
+      workspaceId: string;
+      name: string;
+      slug: string;
+      description?: string;
+      navStyle?: AppLayoutId;
+      pageLayout?: PageLayoutId;
+    },
   ) {
     const workspace = await this.prisma.workspace.findFirst({
       where: { id: input.workspaceId, organizationId },
@@ -98,7 +104,10 @@ export class ApplicationsService {
         slug: input.slug,
         description: input.description ?? null,
         createdById: userId,
-        draftDsl: emptyDsl(input.name) as unknown as object,
+        draftDsl: emptyDsl(input.name, {
+          navStyle: input.navStyle,
+          pageLayout: input.pageLayout,
+        }) as unknown as object,
       },
     });
 
@@ -177,47 +186,6 @@ export class ApplicationsService {
     });
     return { ok: true };
   }
-}
-
-/** A new application starts with one empty page and a sidebar pointing at it. */
-export function emptyDsl(name: string): ApplicationDsl {
-  const pageId = 'page_home';
-  return {
-    dslVersion: DSL_VERSION,
-    appId: '',
-    name,
-    pages: [
-      {
-        id: pageId,
-        name: 'Home',
-        slug: '',
-        isDefault: true,
-        widgets: [],
-      },
-    ],
-    queries: [],
-    jsObjects: [],
-    navigation: {
-      style: 'sidebar',
-      title: name,
-      items: [
-        {
-          id: 'nav_home',
-          label: 'Home',
-          icon: 'home',
-          target: { kind: 'page', pageId },
-        },
-      ],
-    },
-    theme: {
-      primaryColor: '#2563eb',
-      borderRadius: '6px',
-      fontFamily: 'Inter, system-ui, sans-serif',
-      density: 'comfortable',
-      mode: 'light',
-    },
-    appState: {},
-  };
 }
 
 const ENV_ORDER: Record<string, number> = {

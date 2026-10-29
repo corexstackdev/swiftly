@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import type { PropertySection, WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetHost, WidgetProps } from './types';
 import { spacingToCss } from '@/editor/SpacingEditor';
+import { IconGlyph } from '@/icons/IconGlyph';
 
 /**
  * Canvas-designed navigation: a Navbar you drop onto the page, then fill with
@@ -48,11 +49,7 @@ function activateLink(
 function NavFace({ label, icon, caret }: { label: string; icon: string; caret?: boolean }) {
   return (
     <>
-      {icon ? (
-        <span aria-hidden="true" className="shrink-0">
-          {icon}
-        </span>
-      ) : null}
+      {icon ? <IconGlyph name={icon} size={16} className="shrink-0" /> : null}
       <span className="truncate">{label}</span>
       {caret ? (
         <span aria-hidden="true" className="ml-0.5 text-[10px] opacity-70">
@@ -341,10 +338,10 @@ const CONTENT_PROPERTIES: PropertySection = {
     {
       key: 'icon',
       label: 'Icon',
-      control: 'text',
+      control: 'icon',
       expectedType: 'string',
       bindable: true,
-      helpText: 'An emoji or a single character shown before the label.',
+      helpText: 'A React icon or an emoji shown before the label.',
     },
   ],
 };
@@ -642,10 +639,10 @@ export const navMenuWidget: RegisteredWidget = {
           {
             key: 'icon',
             label: 'Icon',
-            control: 'text',
+            control: 'icon',
             expectedType: 'string',
             bindable: true,
-            helpText: 'An emoji or a single character shown before the label.',
+            helpText: 'A React icon or an emoji shown before the label.',
           },
         ],
       },

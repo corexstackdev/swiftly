@@ -6,6 +6,7 @@ import { textStyleProperties, textStyleToCss } from './textStyle';
 import { stateStyleProperties, stateStyleToCss } from './stateStyle';
 import { spacingToCss } from '@/editor/SpacingEditor';
 import { useSeededValue } from './useSeededValue';
+import { IconGlyph } from '@/icons/IconGlyph';
 
 /**
  * Button.
@@ -54,8 +55,11 @@ function ButtonWidget({ properties, state, setState, fireEvent, isDesignMode }: 
   const label = String(properties.label ?? 'Button');
   const icon = String(properties.icon ?? '').trim();
   // Asking for an icon without giving one would leave a button with no content
-  // at all, so the mode falls back rather than rendering an empty box.
-  const display: TabDisplayMode = icon === '' ? 'text' : ((properties.labelDisplay as TabDisplayMode) ?? 'text');
+  // at all, so the mode falls back rather than rendering an empty box. Picking
+  // an icon while "Text only" is selected still shows it beside the label.
+  const requested = (properties.labelDisplay as TabDisplayMode) ?? 'text';
+  const display: TabDisplayMode =
+    icon === '' ? 'text' : requested === 'text' ? 'icon_text' : requested;
 
   const disabled = Boolean(properties.disabled) || Boolean(properties.isLoading);
   const loading = Boolean(properties.isLoading);
@@ -111,11 +115,11 @@ function ButtonWidget({ properties, state, setState, fireEvent, isDesignMode }: 
       ) : (
         <>
           {display !== 'text' && properties.iconPosition !== 'right' && (
-            <span aria-hidden="true">{icon}</span>
+            <IconGlyph name={icon} size={16} className="shrink-0" />
           )}
           {display !== 'icon' && <span className="truncate">{label}</span>}
           {display !== 'text' && properties.iconPosition === 'right' && (
-            <span aria-hidden="true">{icon}</span>
+            <IconGlyph name={icon} size={16} className="shrink-0" />
           )}
         </>
       )}
@@ -167,10 +171,10 @@ export const buttonWidget: RegisteredWidget = {
           {
             key: 'icon',
             label: 'Icon',
-            control: 'text',
+            control: 'icon',
             expectedType: 'string',
             bindable: true,
-            helpText: 'An emoji or a single character.',
+            helpText: 'A React icon or an emoji. Shown beside the label unless Button shows is Icon only.',
           },
           {
             key: 'iconPosition',

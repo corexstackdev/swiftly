@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
-import clsx from 'clsx';
+import { Navigate, useParams } from 'react-router-dom';
 import { api, type PublishedAppPayload } from '@/lib/api';
 import { useSession } from '@/lib/session';
-import { editorPath, publishedAppPath } from '@/lib/paths';
 import { RuntimeApp } from '@/runtime/RuntimeApp';
 
 const RESERVED_ENV_SEGMENTS = new Set(['preview', 'queries']);
@@ -17,7 +15,7 @@ const RESERVED_ENV_SEGMENTS = new Set(['preview', 'queries']);
 
 export function PublishedAppPage() {
   const { workspaceSlug = '', appSlug = '', environmentName } = useParams();
-  const { user, can } = useSession();
+  const { user } = useSession();
 
   const [loaded, setLoaded] = useState<PublishedAppPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,9 +59,6 @@ export function PublishedAppPage() {
     );
   }
 
-  const canSwitch =
-    (can('app:edit') || can('app:publish')) && (loaded.releases?.length ?? 0) > 0;
-
   return (
     <RuntimeApp
       key={loaded.environmentId}
@@ -75,38 +70,6 @@ export function PublishedAppPage() {
       source="published"
       workspaceSlug={loaded.workspaceSlug}
       appSlug={loaded.appSlug}
-      subtitle={`v${loaded.versionNumber} · ${loaded.environmentName}`}
-      trailing={
-        <>
-          {canSwitch &&
-            loaded.releases.map((release) => (
-              <Link
-                key={release.environmentId}
-                to={publishedAppPath(
-                  loaded.workspaceSlug,
-                  loaded.appSlug,
-                  release.environmentName,
-                )}
-                className={clsx(
-                  'rounded px-1.5 py-0.5 text-[11px] font-medium',
-                  release.environmentId === loaded.environmentId
-                    ? 'bg-slate-800 text-white'
-                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800',
-                )}
-              >
-                {release.environmentName}
-              </Link>
-            ))}
-          {can('app:edit') ? (
-            <Link
-              to={editorPath(loaded.applicationId)}
-              className="rounded px-1.5 py-0.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-            >
-              Edit
-            </Link>
-          ) : null}
-        </>
-      }
     />
   );
 }

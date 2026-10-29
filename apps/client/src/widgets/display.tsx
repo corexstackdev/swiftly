@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import type { RegisteredWidget, WidgetProps } from './types';
+import { IconGlyph, hasIcon } from '@/icons/IconGlyph';
 
 /**
  * Read-only display widgets.
@@ -18,7 +19,16 @@ function StatsBoxWidget({ properties }: WidgetProps) {
   const improving = change !== null && (properties.invertChange ? change < 0 : change > 0);
 
   return (
-    <div className="flex h-full w-full flex-col justify-center gap-0.5 overflow-hidden rounded border border-slate-200 bg-white px-3 py-2">
+    <div className="flex h-full w-full items-center gap-3 overflow-hidden rounded border border-slate-200 bg-white px-3 py-2">
+      {hasIcon(properties.icon) ? (
+        <div
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-100"
+          style={{ color: String(properties.iconColor ?? '#475569') }}
+        >
+          <IconGlyph name={properties.icon} size={20} />
+        </div>
+      ) : null}
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
       <span className="truncate text-xs text-slate-500">{String(properties.label ?? '')}</span>
 
       <span className="truncate text-2xl font-semibold tabular-nums text-slate-900">
@@ -40,6 +50,7 @@ function StatsBoxWidget({ properties }: WidgetProps) {
           ) : null}
         </span>
       )}
+      </div>
     </div>
   );
 }
@@ -77,6 +88,8 @@ export const statsBoxWidget: RegisteredWidget = {
         name: 'Content',
         properties: [
           { key: 'label', label: 'Label', control: 'text', expectedType: 'string', bindable: true, defaultValue: 'Total' },
+          { key: 'icon', label: 'Icon', control: 'icon', expectedType: 'string', bindable: true },
+          { key: 'iconColor', label: 'Icon colour', control: 'color', expectedType: 'string', bindable: false, defaultValue: '#475569' },
           {
             key: 'value',
             label: 'Value',
@@ -376,6 +389,97 @@ function IframeWidget({ properties, isDesignMode }: WidgetProps) {
     />
   );
 }
+
+/* ------------------------------------------------------------------ *
+ * Icon
+ * ------------------------------------------------------------------ */
+
+const ICON_ALIGN: Record<string, string> = {
+  left: 'justify-start',
+  center: 'justify-center',
+  right: 'justify-end',
+};
+
+function IconWidget({ properties }: WidgetProps) {
+  const size = Math.max(12, Number(properties.size ?? 24) || 24);
+  return (
+    <div
+      className={clsx(
+        'flex h-full w-full items-center',
+        ICON_ALIGN[String(properties.align ?? 'center')] ?? ICON_ALIGN.center,
+      )}
+      style={{ color: String(properties.color ?? '#334155') }}
+      title={properties.tooltip ? String(properties.tooltip) : undefined}
+    >
+      <IconGlyph name={properties.icon} size={size} />
+    </div>
+  );
+}
+
+export const iconWidget: RegisteredWidget = {
+  component: IconWidget,
+  definition: {
+    type: 'icon',
+    displayName: 'Icon',
+    category: 'display',
+    icon: 'star',
+    defaultLayout: { x: 0, y: 0, w: 2, h: 2 },
+    minSize: { w: 1, h: 1 },
+    events: [],
+    exposedState: [],
+    properties: [
+      {
+        name: 'Content',
+        properties: [
+          {
+            key: 'icon',
+            label: 'Icon',
+            control: 'icon',
+            expectedType: 'string',
+            bindable: true,
+            defaultValue: 'FiStar',
+          },
+          {
+            key: 'size',
+            label: 'Size',
+            control: 'number',
+            expectedType: 'number',
+            bindable: false,
+            defaultValue: 24,
+          },
+          {
+            key: 'color',
+            label: 'Colour',
+            control: 'color',
+            expectedType: 'string',
+            bindable: false,
+            defaultValue: '#334155',
+          },
+          {
+            key: 'align',
+            label: 'Align',
+            control: 'select',
+            expectedType: 'string',
+            bindable: false,
+            defaultValue: 'center',
+            options: [
+              { value: 'left', label: 'Left' },
+              { value: 'center', label: 'Centre' },
+              { value: 'right', label: 'Right' },
+            ],
+          },
+          {
+            key: 'tooltip',
+            label: 'Tooltip',
+            control: 'text',
+            expectedType: 'string',
+            bindable: true,
+          },
+        ],
+      },
+    ],
+  },
+};
 
 export const iframeWidget: RegisteredWidget = {
   component: IframeWidget,

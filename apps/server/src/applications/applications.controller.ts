@@ -14,6 +14,8 @@ const createSchema = z.object({
     .max(60)
     .regex(/^[a-z0-9-]+$/, 'Slug may contain lowercase letters, digits and hyphens'),
   description: z.string().max(500).optional(),
+  navStyle: z.enum(['sidebar', 'topbar', 'none']).optional(),
+  pageLayout: z.enum(['blank', 'navbar', 'dashboard', 'columns', 'form', 'tabs']).optional(),
 });
 
 const saveDraftSchema = z.object({

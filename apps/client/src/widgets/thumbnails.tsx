@@ -50,6 +50,51 @@ export const THUMBNAILS: Record<string, React.ReactNode> = {
   /* ---- layout ---- */
   container: <Frame dashed>{null}</Frame>,
 
+  card: (
+    <Frame dashed>
+      {bar(6, 5, 18, 3, ACCENT)}
+      {bar(6, 11, 28)}
+      {bar(6, 16, 22)}
+      {bar(6, 21, 14)}
+    </Frame>
+  ),
+
+  stack: (
+    <Bare>
+      <rect x="8" y="3" width="28" height="7" rx="1.5" stroke={ACCENT} strokeWidth="1.3" strokeDasharray="3 2" />
+      <rect x="8" y="12" width="28" height="7" rx="1.5" stroke={ACCENT} strokeWidth="1.3" strokeDasharray="3 2" />
+      <rect x="8" y="21" width="28" height="6" rx="1.5" stroke={MUTED} strokeWidth="1.2" strokeDasharray="3 2" />
+    </Bare>
+  ),
+
+  columns: (
+    <Bare>
+      <rect x="2" y="3" width="12" height="24" rx="1.5" stroke={ACCENT} strokeWidth="1.3" strokeDasharray="3 2" />
+      <rect x="16" y="3" width="12" height="24" rx="1.5" stroke={ACCENT} strokeWidth="1.3" strokeDasharray="3 2" />
+      <rect x="30" y="3" width="12" height="24" rx="1.5" stroke={MUTED} strokeWidth="1.2" strokeDasharray="3 2" />
+    </Bare>
+  ),
+
+  accordion: (
+    <Bare>
+      <rect x="3" y="3" width="38" height="8" rx="1.5" fill={ACCENT} />
+      {bar(8, 6, 18, 2, '#ffffff')}
+      <rect x="3" y="13" width="38" height="14" rx="1.5" stroke={ACCENT} strokeWidth="1.3" />
+      {bar(8, 17, 22)}
+      {bar(8, 22, 14)}
+    </Bare>
+  ),
+
+  drawer: (
+    <Bare>
+      <rect x="2" y="3" width="40" height="24" rx="2" stroke={MUTED} strokeWidth="1.1" />
+      <rect x="22" y="3" width="20" height="24" rx="2" fill="#ffffff" stroke={ACCENT} strokeWidth="1.4" />
+      {bar(26, 8, 12, 2.5, ACCENT)}
+      {bar(26, 14, 12)}
+      {bar(26, 19, 8)}
+    </Bare>
+  ),
+
   grid: (
     <svg width="44" height="30" viewBox="0 0 44 30" fill="none" aria-hidden="true">
       <rect
@@ -263,6 +308,15 @@ export const THUMBNAILS: Record<string, React.ReactNode> = {
       <rect x="11" y="17" width="6" height="6" rx="1.2" fill={ACCENT} fillOpacity="0.25" />
       {bar(19.5, 17.6, 18, 2)}
       {bar(19.5, 21, 9, 1.4)}
+    </Bare>
+  ),
+
+  icon: (
+    <Bare>
+      <path
+        d="M22 6.5l2.1 6.4h6.7l-5.4 3.9 2.1 6.4L22 19.7l-5.5 3.5 2.1-6.4-5.4-3.9h6.7z"
+        fill={ACCENT}
+      />
     </Bare>
   ),
 

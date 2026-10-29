@@ -55,3 +55,19 @@ export function dropParentId(event: ReactDragEvent): string | null {
   const nest = (event.target as HTMLElement).closest('[data-drop-parent]');
   return nest?.getAttribute('data-drop-parent') ?? null;
 }
+
+/** Extra properties a container wants on a drop, e.g. `{ column: 1 }`. */
+export function dropSeed(event: ReactDragEvent): Record<string, unknown> | undefined {
+  const nest = (event.target as HTMLElement).closest('[data-drop-seed]');
+  const raw = nest?.getAttribute('data-drop-seed');
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}

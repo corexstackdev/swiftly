@@ -16,7 +16,7 @@
     "db:down": "docker compose down",
     "db:migrate": "pnpm --filter @swiftly/server prisma migrate dev",
     "db:studio": "pnpm --filter @swiftly/server prisma studio",
-    "build:render": "pnpm --filter @swiftly/server exec prisma generate && pnpm build",
+    "build:render": "pnpm --filter @swiftly/server exec prisma generate && pnpm exec turbo run build --concurrency=1",
     "start:render": "pnpm --filter @swiftly/server db:migrate:deploy && pnpm --filter @swiftly/server db:seed && node apps/server/dist/main.js"
   },
   "devDependencies": {

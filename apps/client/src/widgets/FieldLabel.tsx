@@ -1,4 +1,5 @@
 import type { PropertyDefinition, TabDisplayMode } from '@swiftly/shared';
+import { IconGlyph } from '@/icons/IconGlyph';
 
 /** How a field label paints. `hidden` is field-only — tabs have no equivalent. */
 export type LabelDisplayMode = TabDisplayMode | 'hidden';
@@ -38,7 +39,11 @@ export function FieldLabel({
 }) {
   const label = String(text ?? '');
   const glyph = String(icon ?? '').trim();
-  const mode: LabelDisplayMode = display ?? 'text';
+  const requested: LabelDisplayMode = display ?? 'text';
+  // A chosen icon with "Text only" still showing is the usual intent of picking
+  // one. Hidden stays hidden; Icon only stays icon-only.
+  const mode: LabelDisplayMode =
+    requested === 'text' && glyph !== '' ? 'icon_text' : requested;
 
   if (mode === 'hidden') return null;
   if (label === '' && glyph === '') return null;
@@ -71,7 +76,7 @@ export function FieldLabel({
       }}
       className="flex items-center gap-1.5"
     >
-      {showIcon && <span aria-hidden="true">{glyph}</span>}
+      {showIcon && <IconGlyph name={glyph} size={14} className="shrink-0" />}
 
       {showText ? (
         <span className="truncate">{label}</span>
@@ -137,9 +142,9 @@ export const LABEL_PROPERTIES: PropertyDefinition[] = [
   {
     key: 'labelIcon',
     label: 'Label icon',
-    control: 'text',
+    control: 'icon',
     expectedType: 'string',
     bindable: true,
-    helpText: 'An emoji or a single character.',
+    helpText: 'A React icon or an emoji. Shown beside the label unless Label shows is Hidden or Icon only.',
   },
 ];

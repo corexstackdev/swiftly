@@ -1,12 +1,13 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
 import clsx from 'clsx';
-import type { ActionDsl, PageDsl, WidgetDsl } from '@swiftly/shared';
+import type { ActionDsl, PageDsl, PageLayoutId, WidgetDsl } from '@swiftly/shared';
 import { getWidget, getWidgetDefinition } from '@/widgets/registry';
 import { placesOwnChildren, requiredContainerHeight } from './widgetOps';
 import { GRID_COLUMNS, GRID_ROW_HEIGHT, GRID_GAP, runtimeHost } from '@/runtime/PageRenderer';
 import { GridChildResizer } from './GridChildResizer';
-import { acceptPaletteDrag, dropParentId, takePaletteDrop } from './paletteDrag';
+import { PageLayoutPicker } from './LayoutOptions';
+import { acceptPaletteDrag, dropParentId, dropSeed, takePaletteDrop } from './paletteDrag';
 import type { AppRuntime } from '@/runtime/useAppRuntime';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
@@ -44,6 +45,8 @@ export interface CanvasHandlers {
   onDelete: (widgetId: string) => void;
   /** Generate form fields from a database table. */
   onImportFormFromTable?: (formWidgetId: string) => void;
+  /** Applies a starting layout to an empty page. */
+  onApplyPageLayout?: (layout: PageLayoutId) => void;
 }
 
 /**
@@ -190,11 +193,19 @@ export function Canvas({
       />
 
       {page.widgets.length === 0 && (
-        <div className="flex h-96 flex-col items-center justify-center gap-1 text-center">
-          <p className="text-sm font-medium text-slate-500">This page is empty</p>
-          <p className="text-xs text-slate-400">
-            Drag a widget from the left panel to start building
+        <div
+          className="pointer-events-none flex min-h-96 flex-col items-center justify-center px-6 py-10 text-center"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <p className="text-sm font-medium text-slate-700">Choose a page layout</p>
+          <p className="mt-1 max-w-md text-xs text-slate-400">
+            Or drag a widget from the left panel onto the page.
           </p>
+          {handlers.onApplyPageLayout && (
+            <div className="pointer-events-auto mt-5 w-full max-w-xl text-left">
+              <PageLayoutPicker includeBlank={false} onSelect={handlers.onApplyPageLayout} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -475,7 +486,7 @@ function DesignWidget({
         onDrop={(event) => {
           const type = takePaletteDrop(event);
           if (!type) return;
-          handlers.onDropIntoContainer(widget.id, type);
+          handlers.onDropIntoContainer(widget.id, type, dropSeed(event));
         }}
         onClick={(event) => {
           event.stopPropagation();
