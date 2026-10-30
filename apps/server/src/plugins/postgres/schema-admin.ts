@@ -310,33 +310,29 @@ export async function describeTable(
     is_identity: string;
     is_primary_key: boolean;
   }>(
-    `SELECT c.column_name,
-            CASE
-              WHEN c.character_maximum_length IS NOT NULL
-                   AND c.data_type IN ('character varying', 'character')
-                THEN c.data_type || '(' || c.character_maximum_length || ')'
-              WHEN c.data_type IN ('numeric', 'decimal') AND c.numeric_precision IS NOT NULL
-                THEN c.data_type || '(' || c.numeric_precision
-                     || COALESCE(', ' || c.numeric_scale, '') || ')'
-              ELSE c.data_type
-            END AS data_type,
-            c.is_nullable,
-            c.column_default,
-            c.is_identity,
+    `SELECT a.attname AS column_name,
+            format_type(a.atttypid, a.atttypmod) AS data_type,
+            CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+            pg_get_expr(ad.adbin, ad.adrelid) AS column_default,
+            CASE WHEN a.attidentity IN ('a', 'd') THEN 'YES' ELSE 'NO' END AS is_identity,
             EXISTS (
               SELECT 1
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                  ON kcu.constraint_name = tc.constraint_name
-                 AND kcu.table_schema = tc.table_schema
-               WHERE tc.constraint_type = 'PRIMARY KEY'
-                 AND tc.table_schema = c.table_schema
-                 AND tc.table_name = c.table_name
-                 AND kcu.column_name = c.column_name
+                FROM pg_index i
+               WHERE i.indrelid = c.oid
+                 AND i.indisprimary
+                 AND a.attnum = ANY (i.indkey)
             ) AS is_primary_key
-       FROM information_schema.columns c
-      WHERE c.table_schema = $1 AND c.table_name = $2
-      ORDER BY c.ordinal_position`,
+       FROM pg_catalog.pg_attribute a
+       JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_catalog.pg_attrdef ad
+         ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+      WHERE n.nspname = $1
+        AND c.relname = $2
+        AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND a.attnum > 0
+        AND NOT a.attisdropped
+      ORDER BY a.attnum`,
     [schema, table],
   );
 
@@ -476,7 +472,7 @@ function q(name: string): string {
 function describeAdminError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/permission denied for schema/i.test(message)) {
-    return `${message}. The connected database user needs CREATE on that schema (PostgreSQL 15+ no longer grants it on public by default).`;
+    return message;
   }
   if (/permission denied for database/i.test(message)) {
     return `${message}. The connected database user needs permission to create schemas in this database.`;

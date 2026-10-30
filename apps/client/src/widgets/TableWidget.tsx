@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import clsx from 'clsx';
+import type { ActionDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { textStyleProperties, textStyleToCss } from './textStyle';
 import { stateStyleProperties, stateStyleToCss } from './stateStyle';
@@ -21,6 +22,8 @@ import {
   rowSource,
   rowSourceConfigured,
 } from './choiceSource';
+import { PagerBar } from './PagerBar';
+import { IconGlyph, hasIcon } from '@/icons/IconGlyph';
 
 /**
  * The table.
@@ -66,8 +69,8 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
    * what it can see rather than inventing a total.
    */
   const serverTotal = Number(properties.totalRows);
-  const totalRows =
-    pagingMode === 'server' && Number.isFinite(serverTotal) ? serverTotal : rows.length;
+  const totalKnown = pagingMode !== 'server' || Number.isFinite(serverTotal);
+  const totalRows = totalKnown ? (pagingMode === 'server' ? serverTotal : rows.length) : rows.length;
 
   const columns = useMemo(() => {
     const configured = normaliseColumns(properties.columns);
@@ -121,7 +124,11 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
   }, [rows, columns, filter, sort, serverPaged]);
 
   const pageCount =
-    pagingMode === 'scroll' ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
+    pagingMode === 'scroll'
+      ? 1
+      : totalKnown
+        ? Math.max(1, Math.ceil(totalRows / pageSize))
+        : page + (rows.length >= pageSize ? 2 : 1);
 
   // A filter that shortens the result must not leave the view on a page that no
   // longer exists.
@@ -130,7 +137,11 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
   }, [page, pageCount]);
 
   const pageRows = useMemo(() => {
-    if (pagingMode === 'scroll' || serverPaged) return visibleRows;
+    if (pagingMode === 'scroll') return visibleRows;
+    // Server paging is one page from the query. If the query still returned more
+    // than pageSize (raw SQL that had its own unpaged SELECT), slice so Next
+    // moves through what we hold instead of showing the same dump on every page.
+    if (serverPaged && visibleRows.length <= pageSize) return visibleRows;
     const start = page * pageSize;
     return visibleRows.slice(start, start + pageSize);
   }, [visibleRows, pagingMode, serverPaged, page, pageSize]);
@@ -151,15 +162,18 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
     (next: number) => {
       const clamped = Math.min(Math.max(next, 0), pageCount - 1);
       if (clamped === page) return;
+      const offset = clamped * pageSize;
       setPage(clamped);
-      // Fired so a server-paged query can re-run on the new offset.
-      fireEvent('onPageChange', {
-        pageIndex: clamped,
-        pageSize,
-        pageOffset: clamped * pageSize,
-      });
+      // Written before fireEvent so {{ Table.pageOffset }} and the page-window
+      // overlay both see the page the user just asked for, not the previous one.
+      setState({ pageIndex: clamped, pageSize, pageOffset: offset, pageCount });
+      fireEvent(
+        'onPageChange',
+        { pageIndex: clamped, pageSize, pageOffset: offset },
+        pageChangeRefetch(properties, pagingMode),
+      );
     },
-    [page, pageCount, pageSize, fireEvent],
+    [page, pageCount, pageSize, fireEvent, setState, properties, pagingMode],
   );
 
   /* --- styling ---------------------------------------------------- */
@@ -271,12 +285,16 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
   const pagerAtTop = properties.pagerPosition === 'top';
   const pager =
     pagingMode === 'scroll' ? null : (
-      <Pager
+      <PagerBar
         page={page}
         pageCount={pageCount}
+        pageLength={pageRows.length}
+        pageSize={pageSize}
         totalRows={totalRows}
+        totalKnown={totalKnown}
         properties={properties}
         onGo={goToPage}
+        align={String(properties.pagerAlign ?? 'right')}
       />
     );
 
@@ -288,7 +306,9 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
         </span>
         <div className="flex items-center gap-2">
           <span className="text-sm tabular-nums text-slate-400">
-            {totalRows.toLocaleString()} rows
+            {totalKnown
+              ? `${totalRows.toLocaleString()} rows`
+              : `${rows.length.toLocaleString()} this page`}
           </span>
           {properties.searchable !== false && !serverPaged && (
             <input
@@ -474,125 +494,17 @@ function TableWidget({ properties, state, setState, fireEvent, isDesignMode }: W
             )}
           </div>
         )}
+        {pageRows.length > 0 && columns.length === 0 && (
+          <div className="flex h-24 items-center justify-center px-3 text-center text-sm text-slate-400">
+            {isDesignMode
+              ? 'Every column is hidden. Show one from Columns in the property panel.'
+              : 'No columns to show.'}
+          </div>
+        )}
       </div>
 
       {!pagerAtTop && pager}
     </div>
-  );
-}
-
-/**
- * The pager.
- *
- * Styled from the document like everything else on this widget, and it says
- * which rows are on screen rather than only which page: "26–50 of 1,284" is the
- * question people actually have.
- */
-function Pager({
-  page,
-  pageCount,
-  totalRows,
-  properties,
-  onGo,
-}: {
-  page: number;
-  pageCount: number;
-  totalRows: number;
-  properties: Record<string, unknown>;
-  onGo: (page: number) => void;
-}) {
-  const pageSize = Math.max(1, Number(properties.pageSize ?? 25));
-  const first = totalRows === 0 ? 0 : page * pageSize + 1;
-  const last = Math.min((page + 1) * pageSize, totalRows);
-
-  const buttonStyle = stateStyleToCss(properties, 'pagerButton');
-  const align = String(properties.pagerAlign ?? 'right');
-
-  return (
-    <div
-      style={{
-        ...textStyleToCss(properties, 'pager'),
-        ...(readColour(properties, 'pagerBackground')
-          ? { background: readColour(properties, 'pagerBackground') }
-          : {}),
-      }}
-      className={clsx(
-        'flex shrink-0 items-center gap-1.5 border-t border-slate-200 px-2 py-1 text-sm text-slate-500',
-        align === 'left' && 'justify-start',
-        align === 'center' && 'justify-center',
-        align === 'right' && 'justify-end',
-      )}
-    >
-      {properties.pagerShowRange !== false && (
-        <span className="mr-auto tabular-nums" style={{ order: align === 'left' ? 1 : 0 }}>
-          {first.toLocaleString()}–{last.toLocaleString()} of {totalRows.toLocaleString()}
-        </span>
-      )}
-
-      <PagerButton style={buttonStyle} disabled={page === 0} onClick={() => onGo(0)} label="First">
-        «
-      </PagerButton>
-      <PagerButton
-        style={buttonStyle}
-        disabled={page === 0}
-        onClick={() => onGo(page - 1)}
-        label="Previous"
-      >
-        ‹
-      </PagerButton>
-
-      <span className="px-1 tabular-nums">
-        {page + 1} / {pageCount}
-      </span>
-
-      <PagerButton
-        style={buttonStyle}
-        disabled={page >= pageCount - 1}
-        onClick={() => onGo(page + 1)}
-        label="Next"
-      >
-        ›
-      </PagerButton>
-      <PagerButton
-        style={buttonStyle}
-        disabled={page >= pageCount - 1}
-        onClick={() => onGo(pageCount - 1)}
-        label="Last"
-      >
-        »
-      </PagerButton>
-    </div>
-  );
-}
-
-function PagerButton({
-  style,
-  disabled,
-  onClick,
-  label,
-  children,
-}: {
-  style: React.CSSProperties;
-  disabled: boolean;
-  onClick: () => void;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      style={disabled ? undefined : style}
-      className={clsx(
-        'rounded border border-slate-200 px-1.5 leading-5 transition-colors',
-        disabled ? 'cursor-not-allowed opacity-40' : 'hover:bg-slate-100',
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -613,18 +525,31 @@ function RowActionButtons({
     <div className="flex items-center justify-end gap-0.5">
       {actions.map((action) => {
         const meta = actionMeta(action.kind);
+        const iconName = action.icon === undefined ? meta.icon : action.icon;
+        const glyph = hasIcon(iconName);
+        const explicit =
+          typeof action.label === 'string' && action.label.trim() !== '' ? action.label.trim() : '';
+        const matchesDefault = explicit.toLowerCase() === meta.label.toLowerCase();
+        const caption = glyph
+          ? explicit && !matchesDefault
+            ? explicit
+            : ''
+          : explicit || meta.label;
+        const name = explicit || meta.label;
         return (
           <button
             key={action.kind}
             type="button"
             disabled={disabled}
-            title={action.label ?? meta.label}
+            title={name}
+            aria-label={name}
             onClick={(event) => {
               event.stopPropagation();
               if (!disabled) onAction(action);
             }}
             className={clsx(
-              'rounded px-1.5 py-0.5 text-sm font-medium',
+              'no-drag inline-flex items-center justify-center gap-1 rounded text-sm font-medium',
+              glyph && !caption ? 'h-7 w-7 p-0' : 'px-1.5 py-0.5',
               action.kind === 'delete'
                 ? 'text-red-600 hover:bg-red-50'
                 : action.kind === 'edit'
@@ -633,7 +558,8 @@ function RowActionButtons({
               disabled && 'cursor-default opacity-70',
             )}
           >
-            {action.label ?? meta.label}
+            {glyph ? <IconGlyph name={iconName} size={14} className="shrink-0" /> : null}
+            {caption ? <span>{caption}</span> : null}
           </button>
         );
       })}
@@ -679,6 +605,32 @@ function readColour(properties: Record<string, unknown>, key: string): string | 
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
+function boundSourceQuery(properties: Record<string, unknown>): string {
+  if (properties.sourceKind !== 'query') return '';
+  return typeof properties.sourceQuery === 'string' ? properties.sourceQuery.trim() : '';
+}
+
+function actionsRunQuery(actions: unknown, queryName: string): boolean {
+  if (!Array.isArray(actions) || queryName === '') return false;
+  return actions.some(
+    (action) =>
+      action !== null &&
+      typeof action === 'object' &&
+      (action as ActionDsl).type === 'runQuery' &&
+      (action as { queryName?: string }).queryName === queryName,
+  );
+}
+
+function pageChangeRefetch(
+  properties: Record<string, unknown>,
+  pagingMode: string,
+): ActionDsl[] {
+  if (pagingMode !== 'server') return [];
+  const queryName = boundSourceQuery(properties);
+  if (!queryName || actionsRunQuery(properties.onPageChange, queryName)) return [];
+  return [{ type: 'runQuery', queryName }];
+}
+
 const WHEN_PAGED = { key: 'paging', oneOf: ['client', 'server'] };
 
 export const tableWidget: RegisteredWidget = {
@@ -714,7 +666,14 @@ export const tableWidget: RegisteredWidget = {
         name: 'Data',
         properties: [
           ...ROW_SOURCE_PROPERTIES,
-          { key: 'columns', label: 'Columns', control: 'column_config', expectedType: 'array', bindable: false },
+          {
+            key: 'columns',
+            label: 'Columns',
+            control: 'column_config',
+            expectedType: 'array',
+            bindable: false,
+            helpText: 'Hide a column to keep it out of the table without dropping it from the data.',
+          },
           {
             key: 'rowKey',
             label: 'Row identifier',
@@ -740,7 +699,8 @@ export const tableWidget: RegisteredWidget = {
               { value: 'client', label: 'Pages, from loaded rows' },
               { value: 'server', label: 'Pages, fetched per page' },
             ],
-            helpText: 'Scrolling keeps only the visible rows in the page, however many were returned.',
+            helpText:
+              'Fetched per page re-runs the bound query for each page. Bind Total rows if you know the count; otherwise Next stays available while a full page comes back.',
           },
           {
             key: 'pageSize',
@@ -757,7 +717,8 @@ export const tableWidget: RegisteredWidget = {
             control: 'text',
             expectedType: 'number',
             bindable: true,
-            helpText: 'Bind to the count from your query, e.g. {{ CountOrders.data[0].total }}. Without it the pager can only count the page it is holding.',
+            helpText:
+              'Bind to the count from your query, e.g. {{ CountOrders.data[0].total }}. Optional — without it Next stays enabled while a full page comes back.',
             visibleWhen: { key: 'paging', equals: 'server' },
           },
           {

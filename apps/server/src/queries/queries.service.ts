@@ -8,6 +8,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  applyBuilderPageWindow,
+  PAGE_WINDOW_LIMIT_BINDING,
+  PAGE_WINDOW_OFFSET_BINDING,
   queriesOnPage,
   type ApplicationDsl,
   type EvaluatedBindings,
@@ -81,7 +84,9 @@ export class QueriesService {
       input.environmentId,
     );
     const plugin = this.registry.get(resolved.pluginId);
-    const prepared = plugin.prepare(query.definition as never);
+    const prepared = plugin.prepare(
+      applyBuilderPageWindow(query.definition, input.bindings) as never,
+    );
 
     this.assertWriteAllowed(
       prepared.statementType,
@@ -99,7 +104,7 @@ export class QueriesService {
       input.applicationId,
       query.name,
       input.environmentId,
-      bindings.values,
+      cacheValues(bindings.values, input.bindings),
     );
 
     if (cacheable) {
@@ -330,6 +335,17 @@ export class QueriesService {
     }
     return application.draftDsl as unknown as ApplicationDsl;
   }
+}
+
+function cacheValues(
+  values: unknown[],
+  supplied: Record<string, unknown> | undefined,
+): unknown[] {
+  if (!supplied) return values;
+  const limit = supplied[PAGE_WINDOW_LIMIT_BINDING];
+  const offset = supplied[PAGE_WINDOW_OFFSET_BINDING];
+  if (limit == null && offset == null) return values;
+  return [...values, limit ?? null, offset ?? null];
 }
 
 function normalise(expression: string): string {

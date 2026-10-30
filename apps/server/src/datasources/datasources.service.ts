@@ -1,13 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type {
-  ColumnPatch,
-  ColumnSpec,
-  CreateTableInput,
-  DbSchema,
-  SchemaAdmin,
-  TableRowsPage,
-  TestResult,
+import {
+  isPermissionDenied,
+  parsePermissionDeniedSchema,
+  schemaAccessPayload,
+  type ColumnPatch,
+  type ColumnSpec,
+  type CreateTableInput,
+  type DbSchema,
+  type SchemaAdmin,
+  type TableRowsPage,
+  type TestResult,
 } from '@swiftly/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../common/crypto/crypto.service';
@@ -484,7 +487,7 @@ export class DatasourcesService {
     try {
       return await admin.plugin.listRows(admin.config, schema, table, { limit, offset });
     } catch (error) {
-      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+      throwSchemaAccessOrBadRequest(error, admin.config, admin.pluginId, schema);
     }
   }
 
@@ -577,7 +580,7 @@ export class DatasourcesService {
     try {
       await work(resolved.plugin, resolved.config);
     } catch (error) {
-      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+      throwSchemaAccessOrBadRequest(error, resolved.config, resolved.pluginId);
     }
     if (options?.invalidateCache !== false) {
       await this.prisma.datasource.update({
@@ -601,7 +604,7 @@ export class DatasourcesService {
     datasourceId: string,
     environmentId: string,
     requireWritable: boolean,
-  ): Promise<{ plugin: SchemaAdmin; config: unknown }> {
+  ): Promise<{ plugin: SchemaAdmin; config: unknown; pluginId: string }> {
     const datasource = await this.requireDatasource(organizationId, datasourceId);
     if (requireWritable && datasource.readOnly) {
       throw new BadRequestException('This datasource is read-only');
@@ -612,7 +615,7 @@ export class DatasourcesService {
     if (!plugin.schemaAdmin) {
       throw new BadRequestException(`${plugin.name} does not support managing tables from this screen`);
     }
-    return { plugin: plugin.schemaAdmin, config: resolved.config };
+    return { plugin: plugin.schemaAdmin, config: resolved.config, pluginId: resolved.pluginId };
   }
 
   private assertConnectorAllowed(pluginId: string, config: Record<string, unknown>): void {
@@ -700,6 +703,32 @@ function deletePath(object: Record<string, unknown>, path: string): void {
     cursor = cursor[key] as Record<string, unknown>;
   }
   delete cursor[keys[keys.length - 1]!];
+}
+
+function configDbUser(config: unknown): string {
+  if (config && typeof config === 'object' && 'user' in config) {
+    const user = (config as { user?: unknown }).user;
+    if (typeof user === 'string' && user.trim() !== '') return user;
+  }
+  return 'app_user';
+}
+
+function throwSchemaAccessOrBadRequest(
+  error: unknown,
+  config: unknown,
+  pluginId: string,
+  fallbackSchema?: string,
+): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isPermissionDenied(message)) {
+    const schema = parsePermissionDeniedSchema(message) ?? fallbackSchema;
+    if (schema) {
+      throw new BadRequestException(
+        schemaAccessPayload({ schema, dbUser: configDbUser(config), pluginId }),
+      );
+    }
+  }
+  throw new BadRequestException(message);
 }
 
 function deepMerge(

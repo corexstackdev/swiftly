@@ -19,11 +19,14 @@ function StatsBoxWidget({ properties }: WidgetProps) {
   const improving = change !== null && (properties.invertChange ? change < 0 : change > 0);
 
   return (
-    <div className="flex h-full w-full items-center gap-3 overflow-hidden rounded border border-slate-200 bg-white px-3 py-2">
+    <div className="flex h-full w-full items-center gap-3 overflow-hidden rounded-xl border border-slate-200/80 bg-white px-3.5 py-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
       {hasIcon(properties.icon) ? (
         <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-100"
-          style={{ color: String(properties.iconColor ?? '#475569') }}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+          style={{
+            color: String(properties.iconColor ?? '#2563eb'),
+            background: `${String(properties.iconColor ?? '#2563eb')}18`,
+          }}
         >
           <IconGlyph name={properties.icon} size={20} />
         </div>
@@ -52,6 +55,20 @@ function StatsBoxWidget({ properties }: WidgetProps) {
       )}
       </div>
     </div>
+  );
+}
+
+function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+      <path
+        d="M10 2.5 12.2 7l4.8.7-3.5 3.4.8 4.8L10 13.8 5.7 15.9l.8-4.8L3 7.7 7.8 7 10 2.5Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -141,9 +158,9 @@ function ProgressWidget({ properties }: WidgetProps) {
         </span>
       ) : null}
 
-      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
         <div
-          className="h-full rounded-full bg-blue-600 transition-[width]"
+          className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-600 transition-[width] duration-300"
           style={{ width: `${percent}%` }}
         />
       </div>
@@ -204,12 +221,12 @@ function RatingWidget({ properties, state, setState, fireEvent, isDesignMode }: 
               fireEvent('onChange', { value: index + 1 });
             }}
             className={clsx(
-              'text-lg leading-none',
-              filled ? 'text-amber-400' : 'text-slate-300',
-              !readOnly && !isDesignMode && 'cursor-pointer hover:text-amber-500',
+              'transition-transform',
+              filled ? 'text-amber-400' : 'text-slate-200',
+              !readOnly && !isDesignMode && 'cursor-pointer hover:scale-110 hover:text-amber-500',
             )}
           >
-            ★
+            <StarIcon filled={filled} />
           </button>
         );
       })}

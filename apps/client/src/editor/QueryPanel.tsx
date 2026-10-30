@@ -278,6 +278,11 @@ function QueryEditorBody({
           placeholder="SELECT * FROM orders WHERE region = {{ region }}"
           className="min-h-24 min-w-0 flex-1 resize-none p-2 font-mono text-xs outline-none"
         />
+        <p className="shrink-0 border-t border-slate-100 px-2 py-1.5 text-[10px] leading-snug text-slate-400">
+          A table set to fetch per page adds LIMIT and OFFSET when this statement has
+          none. Write your own to keep control, using {'{{ Table1.pageSize }}'} and{' '}
+          {'{{ Table1.pageOffset }}'}.
+        </p>
         {schema && (
           <SchemaBrowser
             schema={schema}
@@ -481,18 +486,38 @@ function QueryEditorBody({
             </select>
           </label>
 
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-slate-600">Limit</span>
-            <input
-              value={String(definition.limit ?? '50')}
-              onChange={(event) =>
-                onChange((draft) => {
-                  (draft.definition as unknown as Record<string, unknown>).limit = event.target.value;
-                })
-              }
-              className="w-32 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
-            />
-          </label>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">Limit</span>
+              <input
+                value={String(definition.limit ?? '50')}
+                onChange={(event) =>
+                  onChange((draft) => {
+                    (draft.definition as unknown as Record<string, unknown>).limit = event.target.value;
+                  })
+                }
+                className="w-32 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">Offset</span>
+              <input
+                value={String(definition.offset ?? '')}
+                placeholder="0"
+                onChange={(event) =>
+                  onChange((draft) => {
+                    (draft.definition as unknown as Record<string, unknown>).offset =
+                      event.target.value;
+                  })
+                }
+                className="w-32 rounded border border-slate-300 px-2 py-1 font-mono text-xs outline-none focus:border-blue-500"
+              />
+            </label>
+          </div>
+          <p className="text-[10px] leading-snug text-slate-400">
+            A table set to fetch per page supplies limit and offset for each page, including
+            raw SQL that has no LIMIT / OFFSET of its own.
+          </p>
 
           {selected && (
             <p className="font-mono text-[11px] text-slate-500">

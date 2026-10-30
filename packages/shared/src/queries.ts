@@ -30,6 +30,12 @@ export interface RawSqlDefinition {
   kind: 'raw_sql';
   sql: string;
   identifierAllowlist?: IdentifierAllowlistEntry[];
+  /**
+   * Execute-time page window from a server-paged table. Not an authoring field —
+   * the query editor does not write these; `applyBuilderPageWindow` does.
+   */
+  limit?: string;
+  offset?: string;
 }
 
 export type ParameterDirection = 'in' | 'out' | 'inout';
@@ -137,3 +143,83 @@ export interface ApiDefinition {
 }
 
 export type AnyQueryDefinition = QueryDefinition | ApiDefinition;
+
+/**
+ * Bindings a server-paged table (or list) sends so a SELECT can fetch one page.
+ * The runtime writes these; the compiler turns them into LIMIT/OFFSET.
+ */
+export const PAGE_WINDOW_LIMIT_BINDING = '__page.limit';
+export const PAGE_WINDOW_OFFSET_BINDING = '__page.offset';
+
+/** Strips comments so LIMIT inside `-- LIMIT 10` is not treated as paging. */
+function stripSqlComments(sql: string): string {
+  return sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+}
+
+/**
+ * True when the statement already windows itself — a second LIMIT would be a
+ * syntax error, and a wrapping OFFSET would skip inside the author's page.
+ * `table.offset` is not a clause: the keyword must not follow `.` or an ident.
+ */
+export function sqlAlreadyHasPageClause(sql: string): boolean {
+  const stripped = stripSqlComments(sql);
+  return (
+    /(?<![\w."`\[\]])\bLIMIT\s+\S/i.test(stripped) ||
+    /(?<![\w."`\[\]])\bOFFSET\s+\S/i.test(stripped) ||
+    /(?<![\w."`\[\]])\bFETCH\s+(?:NEXT|FIRST)\s+\S/i.test(stripped)
+  );
+}
+
+/** SELECT / WITH that is a single statement, so a LIMIT suffix is legal. */
+export function sqlAcceptsPageWindow(sql: string): boolean {
+  const stripped = stripSqlComments(sql).replace(/;+\s*$/, '').trim();
+  if (stripped.includes(';')) return false;
+  return /^(WITH|SELECT)\b/i.test(stripped);
+}
+
+function pageWindowFields(
+  bindings: Record<string, unknown>,
+): { limit?: string; offset?: string } | null {
+  const limit = bindings[PAGE_WINDOW_LIMIT_BINDING];
+  const offset = bindings[PAGE_WINDOW_OFFSET_BINDING];
+  if (limit == null && offset == null) return null;
+
+  const next: { limit?: string; offset?: string } = {};
+  if (limit != null && Number.isFinite(Number(limit))) {
+    next.limit = String(Math.max(1, Math.floor(Number(limit))));
+  }
+  if (offset != null && Number.isFinite(Number(offset))) {
+    next.offset = String(Math.max(0, Math.floor(Number(offset))));
+  }
+  return next.limit == null && next.offset == null ? null : next;
+}
+
+/**
+ * Applies the window a server-paged widget asked for onto a SELECT.
+ * Builder queries get limit/offset fields. Raw SQL that has no LIMIT / OFFSET
+ * of its own gets the same fields, which the compiler appends as a suffix.
+ * Raw SQL that already pages itself is left alone.
+ */
+export function applyBuilderPageWindow(
+  definition: unknown,
+  bindings: Record<string, unknown> | undefined,
+): unknown {
+  if (!definition || typeof definition !== 'object' || !bindings) return definition;
+  const pageWindow = pageWindowFields(bindings);
+  if (!pageWindow) return definition;
+
+  const current = definition as QueryDefinition;
+  if (current.kind === 'builder') {
+    if (current.operation !== 'select') return definition;
+    return { ...current, ...pageWindow };
+  }
+
+  if (current.kind === 'raw_sql') {
+    if (!sqlAcceptsPageWindow(current.sql) || sqlAlreadyHasPageClause(current.sql)) {
+      return definition;
+    }
+    return { ...current, ...pageWindow };
+  }
+
+  return definition;
+}

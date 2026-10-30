@@ -83,26 +83,14 @@ export function SpacingEditor({
   return (
     <div className="no-drag flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5">
-        <button
-          type="button"
+        <LinkButton
+          linked={linked}
           onClick={() => {
             const next = !linked;
             setLinked(next);
-            // Collapsing to linked takes the top value, which is the one the
-            // combined field was already showing.
             if (next) setAll(current.top);
           }}
-          title={linked ? 'Set each side separately' : 'Use one value for all sides'}
-          className={clsx(
-            'rounded border px-1.5 py-1 text-[11px]',
-            linked
-              ? 'border-blue-500 bg-blue-50 text-blue-700'
-              : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-50',
-          )}
-        >
-          {linked ? '🔗' : '⛓'}
-        </button>
-
+        />
         {linked ? (
           <input
             type="number"
@@ -112,28 +100,92 @@ export function SpacingEditor({
             className={control}
           />
         ) : (
-          <span className="text-[11px] text-slate-400">Top / Right / Bottom / Left</span>
+          <span className="text-[11px] text-slate-400">Each side, in pixels</span>
         )}
       </div>
 
       {!linked && (
-        <div className="grid grid-cols-4 gap-1">
-          {(['top', 'right', 'bottom', 'left'] as const).map((side) => (
-            <label key={side} className="flex flex-col gap-0.5">
-              <span className="text-center text-[9px] tracking-wide text-slate-400 uppercase">
-                {side.charAt(0)}
-              </span>
-              <input
-                type="number"
-                min={0}
-                value={current[side]}
-                onChange={(event) => setSide(side, Math.max(0, Number(event.target.value) || 0))}
-                className="w-full rounded border border-slate-300 px-1 py-1 text-center text-xs outline-none focus:border-blue-500"
-              />
-            </label>
-          ))}
+        <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2">
+          <div className="flex flex-col items-center gap-1">
+            <SideInput value={current.top} onChange={(next) => setSide('top', next)} label="T" />
+            <div className="flex w-full items-center gap-1">
+              <SideInput value={current.left} onChange={(next) => setSide('left', next)} label="L" />
+              <div className="flex h-9 min-w-0 flex-1 items-center justify-center rounded-md border border-dashed border-slate-300 bg-white text-[10px] text-slate-300">
+                box
+              </div>
+              <SideInput value={current.right} onChange={(next) => setSide('right', next)} label="R" />
+            </div>
+            <SideInput value={current.bottom} onChange={(next) => setSide('bottom', next)} label="B" />
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+function SideInput({
+  value,
+  onChange,
+  label,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  label: string;
+}) {
+  return (
+    <label className="flex w-12 flex-col items-center gap-0.5">
+      <span className="text-[9px] font-medium tracking-wide text-slate-400">{label}</span>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(event) => onChange(Math.max(0, Number(event.target.value) || 0))}
+        className="w-full rounded-md border border-slate-200 bg-white px-1 py-1 text-center text-xs tabular-nums outline-none focus:border-blue-500 focus:ring-[3px] focus:ring-blue-500/15"
+      />
+    </label>
+  );
+}
+
+function LinkButton({ linked, onClick }: { linked: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={linked ? 'Set each side separately' : 'Use one value for all sides'}
+      className={clsx(
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors',
+        linked
+          ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
+      )}
+    >
+      {linked ? <LinkIcon /> : <UnlinkIcon />}
+    </button>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="M5 8.5 3.8 9.7a2 2 0 0 1-2.8-2.8L2.2 5.7M7 3.5 8.2 2.3a2 2 0 1 1 2.8 2.8L9.8 6.3M4.5 7.5l3-3"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function UnlinkIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="M5 8.5 3.8 9.7a2 2 0 0 1-2.8-2.8L2.2 5.7M7 3.5 8.2 2.3a2 2 0 1 1 2.8 2.8L9.8 6.3M1.5 1.5l9 9"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }

@@ -3,6 +3,8 @@
 :root {
   font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
   color-scheme: light;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html,
@@ -167,4 +169,51 @@ body,
 .react-grid-item.react-draggable-dragging,
 .react-grid-item.resizing {
   z-index: 10;
+}
+
+/* Canvas slider — native range, restyled so the track fills as the thumb moves. */
+.sw-range {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #2563eb var(--sw-range-pct, 0%),
+    #e2e8f0 var(--sw-range-pct, 0%)
+  );
+  outline: none;
+}
+
+.sw-range:disabled {
+  opacity: 0.5;
+}
+
+.sw-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #2563eb;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.28);
+  cursor: pointer;
+}
+
+.sw-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #2563eb;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.28);
+  cursor: pointer;
+}
+
+.sw-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgb(37 99 235 / 0.2);
+}
+
+.sw-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgb(37 99 235 / 0.2);
 }

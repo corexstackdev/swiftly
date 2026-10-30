@@ -2,6 +2,18 @@ import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import type { NavigationDsl, PageDsl, ThemeDsl } from '@swiftly/shared';
 import { IconGlyph, hasIcon } from '@/icons/IconGlyph';
+import {
+  expandedSidebarWidth,
+  navAppearanceOf,
+  sidebarHintClass,
+  sidebarItemClass,
+  sidebarShellClass,
+  sidebarShellStyle,
+  sidebarSideOf,
+  sidebarTitleClass,
+  topbarShellClass,
+  topbarShellStyle,
+} from '@/runtime/navChrome';
 
 /**
  * App chrome around the design canvas.
@@ -17,7 +29,6 @@ export function DesignAppFrame({
   pages,
   currentPageId,
   theme,
-  sidebarWidth,
   children,
   onNavigate,
 }: {
@@ -25,33 +36,46 @@ export function DesignAppFrame({
   pages: PageDsl[];
   currentPageId: string;
   theme: ThemeDsl;
-  sidebarWidth: number;
   children: ReactNode;
   onNavigate: (pageId: string) => void;
 }) {
   const style = navigation.style ?? 'sidebar';
   const accent = theme.primaryColor || '#2563eb';
+  const appearance = navAppearanceOf(navigation);
+  const side = sidebarSideOf(navigation);
+  const sidebarWidth = expandedSidebarWidth(navigation);
+
+  const sidebar =
+    style === 'sidebar' ? (
+      <DesignSidebar
+        navigation={navigation}
+        pages={pages}
+        currentPageId={currentPageId}
+        accent={accent}
+        width={sidebarWidth}
+        side={side}
+        appearance={appearance}
+        onNavigate={onNavigate}
+      />
+    ) : null;
 
   return (
-    <div className="flex min-h-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-      {style === 'sidebar' && (
-        <DesignSidebar
-          navigation={navigation}
-          pages={pages}
-          currentPageId={currentPageId}
-          accent={accent}
-          width={sidebarWidth}
-          onNavigate={onNavigate}
-        />
+    <div
+      className={clsx(
+        'flex h-full min-h-0 items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm',
+        side === 'right' && style === 'sidebar' && 'flex-row-reverse',
       )}
+    >
+      {sidebar}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {style === 'topbar' && (
           <DesignTopbar
             navigation={navigation}
             pages={pages}
             currentPageId={currentPageId}
             accent={accent}
+            appearance={appearance}
             onNavigate={onNavigate}
           />
         )}
@@ -63,13 +87,13 @@ export function DesignAppFrame({
             onNavigate={onNavigate}
           />
         )}
-        <div className="min-h-0 flex-1">{children}</div>
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+          {children}
+        </div>
       </div>
     </div>
   );
 }
-
-export const DESIGN_SIDEBAR_WIDTH = 200;
 
 function DesignSidebar({
   navigation,
@@ -77,6 +101,8 @@ function DesignSidebar({
   currentPageId,
   accent,
   width,
+  side,
+  appearance,
   onNavigate,
 }: {
   navigation: NavigationDsl;
@@ -84,29 +110,35 @@ function DesignSidebar({
   currentPageId: string;
   accent: string;
   width: number;
+  side: 'left' | 'right';
+  appearance: ReturnType<typeof navAppearanceOf>;
   onNavigate: (pageId: string) => void;
 }) {
   const items = navigation.items.length > 0 ? navigation.items : fallbackItems(pages);
 
   return (
     <nav
-      className="sticky top-0 flex shrink-0 flex-col self-start border-r border-slate-200 bg-slate-50"
-      style={{ width, minHeight: '100%' }}
+      className={clsx(
+        'flex h-full min-h-0 shrink-0 flex-col self-stretch',
+        sidebarShellClass(appearance, side),
+      )}
+      style={sidebarShellStyle(appearance, accent, width)}
     >
-      <div className="border-b border-slate-200 px-3 py-3">
-        <div className="truncate text-sm font-semibold text-slate-900">
+      <div className={clsx('border-b px-3 py-3', appearance === 'light' ? 'border-slate-200' : 'border-white/10')}>
+        <div className={clsx('truncate text-sm font-semibold', sidebarTitleClass(appearance))}>
           {navigation.title || 'Menu'}
         </div>
-        <div className="mt-0.5 text-[10px] tracking-wide text-slate-400 uppercase">
+        <div className={clsx('mt-0.5 text-[10px] tracking-wide uppercase', sidebarHintClass(appearance))}>
           App navigation
         </div>
       </div>
-      <div className="flex flex-1 flex-col gap-0.5 p-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto p-2">
         {items.map((item) => (
           <NavButton
             key={item.id}
             label={item.label}
             icon={item.icon}
+            appearance={appearance}
             active={item.target.kind === 'page' && item.target.pageId === currentPageId}
             accent={accent}
             onClick={() => {
@@ -122,6 +154,7 @@ function DesignSidebar({
               label={child.label}
               icon={child.icon}
               nested
+              appearance={appearance}
               active={child.target.kind === 'page' && child.target.pageId === currentPageId}
               accent={accent}
               onClick={() => {
@@ -141,19 +174,27 @@ function DesignTopbar({
   pages,
   currentPageId,
   accent,
+  appearance,
   onNavigate,
 }: {
   navigation: NavigationDsl;
   pages: PageDsl[];
   currentPageId: string;
   accent: string;
+  appearance: ReturnType<typeof navAppearanceOf>;
   onNavigate: (pageId: string) => void;
 }) {
   const items = navigation.items.length > 0 ? navigation.items : fallbackItems(pages);
 
   return (
-    <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2">
-      <span className="mr-2 shrink-0 text-sm font-semibold text-slate-900">
+    <nav
+      className={clsx(
+        'flex shrink-0 items-center gap-1 overflow-x-auto px-3 py-2',
+        topbarShellClass(appearance),
+      )}
+      style={topbarShellStyle(appearance, accent)}
+    >
+      <span className={clsx('mr-2 shrink-0 text-sm font-semibold', sidebarTitleClass(appearance))}>
         {navigation.title || ''}
       </span>
       {items.flatMap((item) => [item, ...(item.children ?? [])]).map((item) => (
@@ -162,6 +203,7 @@ function DesignTopbar({
           label={item.label}
           icon={item.icon}
           compact
+          appearance={appearance}
           active={item.target.kind === 'page' && item.target.pageId === currentPageId}
           accent={accent}
           onClick={() => {
@@ -197,6 +239,7 @@ function DesignPageStrip({
           key={page.id}
           label={page.name}
           compact
+          appearance="light"
           active={page.id === currentPageId}
           accent={accent}
           onClick={() => onNavigate(page.id)}
@@ -215,6 +258,7 @@ function NavButton({
   disabled,
   compact,
   nested,
+  appearance,
 }: {
   label: string;
   icon?: string;
@@ -224,6 +268,7 @@ function NavButton({
   disabled?: boolean;
   compact?: boolean;
   nested?: boolean;
+  appearance: ReturnType<typeof navAppearanceOf>;
 }) {
   return (
     <button
@@ -235,13 +280,14 @@ function NavButton({
         compact ? 'px-2.5 py-1' : 'w-full px-2.5 py-1.5',
         nested && 'pl-7',
         disabled && 'cursor-default opacity-50',
-        active
-          ? 'font-medium'
-          : 'text-slate-600 hover:bg-white hover:text-slate-900',
+        active ? 'font-medium' : sidebarItemClass(appearance, Boolean(compact)),
       )}
       style={
         active
-          ? { background: `${accent}18`, color: accent }
+          ? {
+              background: `${accent}33`,
+              color: appearance === 'light' ? accent : '#ffffff',
+            }
           : undefined
       }
     >

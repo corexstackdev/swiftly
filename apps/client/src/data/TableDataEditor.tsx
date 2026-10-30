@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import type { ColumnMetadata, TableRowsPage } from '@swiftly/shared';
 import { api } from '@/lib/api';
 import { formatCell, formatError, parseCell } from './columnTypes';
+import { SchemaAccessPanel, schemaAccessFromError } from './SchemaAccessPanel';
 
 const PAGE_SIZE = 50;
 
@@ -13,6 +14,9 @@ export function TableDataEditor({
   table,
   canManage,
   reloadToken,
+  dbUser,
+  owner,
+  onAccessFixed,
 }: {
   datasourceId: string;
   environmentId: string;
@@ -20,12 +24,15 @@ export function TableDataEditor({
   table: string;
   canManage: boolean;
   reloadToken: number;
+  dbUser?: string;
+  owner?: string;
+  onAccessFixed?: () => void;
 }) {
   const [page, setPage] = useState<TableRowsPage | null>(null);
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [inserting, setInserting] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
@@ -42,10 +49,16 @@ export function TableDataEditor({
         ),
       );
     } catch (caught) {
-      setError(formatError(caught));
+      setError(caught);
       setPage(null);
     }
   }, [datasourceId, environmentId, schema, table, offset]);
+
+  const errorText = error ? formatError(error) : null;
+  const accessHint = schemaAccessFromError(
+    error,
+    dbUser ? { schema, dbUser, owner } : undefined,
+  );
 
   useEffect(() => {
     setOffset(0);
@@ -61,7 +74,7 @@ export function TableDataEditor({
     () => columns.filter((column) => column.isPrimaryKey).map((column) => column.name),
     [columns],
   );
-  const canEditRows = canManage && primary.length > 0;
+  const canEditRows = canManage && primary.length > 0 && !accessHint;
   const total = page?.totalRows ?? 0;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + PAGE_SIZE, total);
@@ -93,7 +106,7 @@ export function TableDataEditor({
       });
       await load();
     } catch (caught) {
-      setError(formatError(caught));
+      setError(caught);
     } finally {
       setBusy(false);
     }
@@ -115,17 +128,30 @@ export function TableDataEditor({
       setSelected(new Set());
       await load();
     } catch (caught) {
-      setError(formatError(caught));
+      setError(caught);
     } finally {
       setBusy(false);
     }
   };
 
+  if (accessHint) {
+    return (
+      <SchemaAccessPanel
+        hint={accessHint}
+        refreshing={busy}
+        onRefresh={() => {
+          if (onAccessFixed) onAccessFixed();
+          else void load();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-2">
         <span className="text-xs text-slate-500">
-          {!page && !error ? 'Loading…' : total === 0 ? 'No rows' : `${from}–${to} of ${total.toLocaleString()} rows`}
+          {!page && !errorText ? 'Loading…' : total === 0 ? 'No rows' : `${from}–${to} of ${total.toLocaleString()} rows`}
           {page ? ` · ${page.durationMs}ms` : ''}
         </span>
         {!canEditRows && canManage && page && (
@@ -154,6 +180,30 @@ export function TableDataEditor({
           )}
           <button
             type="button"
+            onClick={() => void load()}
+            disabled={busy}
+            title="Reload rows from the database"
+            className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path
+                d="M10 6A4 4 0 1 1 8.2 2.4"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <path
+                d="M8.6 1.2v2.2H6.4"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Refresh
+          </button>
+          <button
+            type="button"
             disabled={offset === 0 || busy}
             onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
             className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:opacity-40"
@@ -171,9 +221,9 @@ export function TableDataEditor({
         </div>
       </div>
 
-      {error && (
+      {errorText && (
         <p className="mx-4 mt-2 rounded bg-red-50 px-3 py-1.5 text-xs whitespace-pre-wrap text-red-700">
-          {error}
+          {errorText}
         </p>
       )}
 
@@ -256,7 +306,7 @@ export function TableDataEditor({
               setInserting(false);
               await load();
             } catch (caught) {
-              setError(formatError(caught));
+              setError(caught);
             } finally {
               setBusy(false);
             }

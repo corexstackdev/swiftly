@@ -4,6 +4,7 @@ import type { WidgetDefinition } from '@swiftly/shared';
 import { listWidgets } from '@/widgets/registry';
 import { THUMBNAILS, fallbackThumbnail } from '@/widgets/thumbnails';
 import { beginPaletteDrag, endPaletteDrag, notePaletteDrag, paletteDragMoved } from './paletteDrag';
+import { SearchField } from './controls';
 
 /**
  * The widget palette.
@@ -100,19 +101,16 @@ export function WidgetPalette({ onAdd }: { onAdd?: (widgetType: string) => void 
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-1.5 px-2 pb-2">
-        <div className="relative min-w-0 flex-1">
-          <input
-            autoFocus
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search"
-            aria-label="Search UI elements"
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 outline-none transition-colors hover:border-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15"
-          />
-        </div>
+        <SearchField
+          autoFocus
+          value={search}
+          onChange={setSearch}
+          placeholder="Search"
+          aria-label="Search UI elements"
+          className="min-w-0 flex-1"
+        />
 
-        <div className="flex shrink-0 items-center gap-0.5 rounded border border-slate-200 p-0.5">
+        <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5">
           <DensityButton current={density} value="list" onSelect={setAndStore} label="Compact list">
             <ListIcon />
           </DensityButton>
@@ -145,7 +143,7 @@ export function WidgetPalette({ onAdd }: { onAdd?: (widgetType: string) => void 
                     {...dragProps(widget)}
                     className="group/item cursor-grab list-none active:cursor-grabbing"
                   >
-                    <div className="flex items-center gap-2 py-1 pr-2 pl-2.5 transition-colors group-hover/item:bg-blue-50">
+                    <div className="flex items-center gap-2 rounded-md py-1 pr-2 pl-2.5 transition-colors group-hover/item:bg-blue-50">
                       <span className="flex h-4 w-6 shrink-0 items-center justify-center text-slate-400 [&>svg]:h-full [&>svg]:w-full">
                         {THUMBNAILS[widget.type] ?? fallbackThumbnail()}
                       </span>
@@ -160,7 +158,7 @@ export function WidgetPalette({ onAdd }: { onAdd?: (widgetType: string) => void 
                   <div
                     key={widget.type}
                     {...dragProps(widget)}
-                    className="flex cursor-grab flex-col items-center gap-0.5 rounded border border-transparent px-0.5 py-1.5 text-center transition-colors hover:border-blue-300 hover:bg-blue-50 active:cursor-grabbing"
+                    className="flex cursor-grab flex-col items-center gap-0.5 rounded-md border border-transparent px-0.5 py-1.5 text-center transition-colors hover:border-blue-200 hover:bg-blue-50 active:cursor-grabbing"
                   >
                     <span className="flex h-6 w-9 items-center justify-center text-slate-400 [&>svg]:h-full [&>svg]:w-full">
                       {THUMBNAILS[widget.type] ?? fallbackThumbnail()}
@@ -207,7 +205,7 @@ function DensityButton({
       onClick={() => onSelect(value)}
       className={clsx(
         'rounded p-1 transition-colors',
-        current === value ? 'bg-slate-100 text-slate-700' : 'text-slate-400 hover:text-slate-600',
+        current === value ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600',
       )}
     >
       {children}

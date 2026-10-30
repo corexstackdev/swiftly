@@ -217,3 +217,128 @@ export const ROW_SOURCE_PROPERTIES: PropertyDefinition[] = [
     visibleWhen: { key: 'sourceKind', equals: '__legacy__' },
   },
 ];
+
+const WHEN_VALUE_HAS_SOURCE = { key: 'sourceKind', oneOf: ['json', 'js', 'query'] };
+
+/**
+ * A single figure or one record — for card body text, not a list and not the
+ * card chrome. Same three sources as a table: JSON, a JavaScript function, a
+ * query. The widget reads the first row (or a scalar) and shows that field.
+ */
+export const VALUE_SOURCE_PROPERTIES: PropertyDefinition[] = [
+  {
+    key: 'sourceKind',
+    label: 'Data from',
+    control: 'select',
+    expectedType: 'string',
+    bindable: false,
+    defaultValue: 'none',
+    options: [
+      { value: 'none', label: 'None' },
+      { value: 'json', label: 'JSON' },
+      { value: 'js', label: 'JavaScript' },
+      { value: 'query', label: 'Query' },
+    ],
+    helpText:
+      'Same sources as a table. The text uses the first row, or a single number the function or query returns.',
+  },
+  {
+    key: 'sourceData',
+    label: 'Source Data',
+    control: 'json',
+    expectedType: 'any',
+    bindable: true,
+    placeholder: '{{ GetTotals.data }}',
+    visibleWhen: { key: 'sourceKind', equals: 'json' },
+    helpText:
+      'JSON, a binding such as {{ GetTotals.data }}, or a single number. A `{ data: [...] }` query result works too.',
+  },
+  {
+    key: 'sourceJs',
+    label: 'JavaScript function',
+    control: 'js_function',
+    expectedType: 'any',
+    bindable: true,
+    visibleWhen: { key: 'sourceKind', equals: 'js' },
+    placeholder: '{{ Utils.totalProducts() }}',
+    helpText:
+      'Return a number, a row object, or { data: [...] }. The text shows the first row or the number itself.',
+  },
+  {
+    key: 'sourceQuery',
+    label: 'Query',
+    control: 'query_picker',
+    expectedType: 'string',
+    bindable: false,
+    visibleWhen: { key: 'sourceKind', equals: 'query' },
+    helpText: 'The text reads this query’s result as soon as you pick it.',
+  },
+  {
+    key: 'valueKey',
+    label: 'Value field',
+    control: 'text',
+    expectedType: 'string',
+    bindable: false,
+    visibleWhen: WHEN_VALUE_HAS_SOURCE,
+    helpText:
+      'Column shown as the text. Leave blank if the source is already a single number, or has one column.',
+  },
+];
+
+export function valueSource(properties: Record<string, unknown>): unknown {
+  if (properties.sourceKind === 'js') return properties.sourceJs;
+  if (properties.sourceKind === 'query') return properties.sourceData;
+  if (properties.sourceKind === 'json') return properties.sourceData;
+  return undefined;
+}
+
+export function valueSourceConfigured(properties: Record<string, unknown>): boolean {
+  if (properties.sourceKind === 'js') {
+    const source = properties.sourceJs;
+    return source !== undefined && source !== null && source !== '';
+  }
+  if (properties.sourceKind === 'query') return queryName(properties) !== '';
+  if (properties.sourceKind === 'json') {
+    const json = properties.sourceData;
+    return json !== undefined && json !== null && json !== '';
+  }
+  return false;
+}
+
+export function emptyValueHint(properties: Record<string, unknown>): string {
+  if (properties.sourceKind === 'js') return 'Pick a JavaScript function that returns a value or a row';
+  if (properties.sourceKind === 'query') {
+    return queryName(properties) ? 'Waiting for the query to return' : 'Pick a query';
+  }
+  if (properties.sourceKind === 'json') return 'Paste JSON or bind {{ Query.data }}';
+  return '';
+}
+
+export function mappedField(item: Record<string, unknown> | null, key: unknown): unknown {
+  if (!item || typeof key !== 'string' || key.trim() === '') return undefined;
+  const value = item[key.trim()];
+  return value === undefined ? undefined : value;
+}
+
+/** First-row field, a scalar, or the only column on a one-column row. */
+export function mappedSourceValue(
+  properties: Record<string, unknown>,
+  item: Record<string, unknown> | null,
+  source: unknown,
+): unknown {
+  const fromKey = mappedField(item, properties.valueKey);
+  if (fromKey !== undefined) return fromKey;
+  if (typeof source === 'number' || typeof source === 'boolean') return source;
+  if (typeof source === 'string') {
+    const text = source.trim();
+    if (text && !text.startsWith('{') && !text.startsWith('[') && !text.startsWith('{{')) {
+      const numeric = Number(text);
+      return Number.isFinite(numeric) ? numeric : text;
+    }
+  }
+  if (item) {
+    const keys = Object.keys(item);
+    if (keys.length === 1) return item[keys[0]];
+  }
+  return undefined;
+}

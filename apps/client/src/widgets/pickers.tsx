@@ -12,6 +12,7 @@ import {
   showFieldError,
   validate,
 } from './validation';
+import { fieldErrorClass, fieldSurfaceClass } from './fieldChrome';
 
 /**
  * Numeric and date inputs.
@@ -131,15 +132,14 @@ function NumberInputWidget({ properties, state, setState, fireEvent, isDesignMod
             if (clamped !== raw) fireEvent('onChange', { value: clamped });
           }}
           className={clsx(
-            'no-drag h-full w-full rounded border px-2 outline-none focus:ring-2 focus:ring-blue-500/30',
+            'h-full',
+            fieldSurfaceClass(showError),
             prefix && (String(prefix).length > 1 ? 'pl-8' : 'pl-6'),
-            showError ? 'border-red-400' : 'border-slate-300 focus:border-blue-500',
-            'disabled:bg-slate-50 disabled:text-slate-400',
           )}
         />
       </div>
 
-      {showError && <p className="text-xs text-red-600">{result.errors[0]}</p>}
+      {showError && <p className={fieldErrorClass}>{result.errors[0]}</p>}
     </div>
   );
 }
@@ -390,14 +390,10 @@ function DatePickerWidget({ properties, state, setState, fireEvent, isDesignMode
           fireEvent('onChange', { value: event.target.value });
         }}
         onBlur={() => setState({ touched: true })}
-        className={clsx(
-          'no-drag min-h-0 w-full flex-1 rounded border px-2 outline-none focus:ring-2 focus:ring-blue-500/30',
-          showError ? 'border-red-400' : 'border-slate-300 focus:border-blue-500',
-          'disabled:bg-slate-50 disabled:text-slate-400',
-        )}
+        className={clsx('flex-1', fieldSurfaceClass(showError))}
       />
 
-      {showError && <p className="text-xs text-red-600">{result.errors[0]}</p>}
+      {showError && <p className={fieldErrorClass}>{result.errors[0]}</p>}
     </div>
   );
 }
@@ -490,7 +486,8 @@ function SliderWidget({ properties, state, setState, fireEvent, isDesignMode }: 
           setState({ value: next });
           fireEvent('onChange', { value: next });
         }}
-        className="no-drag w-full accent-blue-600"
+        style={{ ['--sw-range-pct' as string]: `${max === min ? 0 : ((value - min) / (max - min)) * 100}%` }}
+        className="sw-range no-drag w-full"
       />
 
       <div className="flex justify-between text-[10px] text-slate-400">

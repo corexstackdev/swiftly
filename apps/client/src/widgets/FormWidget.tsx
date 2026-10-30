@@ -112,7 +112,7 @@ function FormWidget({
         'flex h-full w-full flex-col',
         // Hidden overflow clips the drag handle that sits above each child.
         isDesignMode ? 'overflow-visible' : 'overflow-hidden',
-        properties.bordered !== false && 'rounded border border-slate-200',
+        properties.bordered !== false && 'rounded-xl border border-slate-200/80 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
       )}
       style={{
         background: String(properties.background ?? '#ffffff'),
@@ -170,8 +170,8 @@ function FormWidget({
           disabled={Boolean(properties.disabled)}
           onClick={submit}
           className={clsx(
-            'no-drag rounded px-3 py-1.5 text-sm font-medium text-white',
-            'bg-blue-600 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50',
+            'no-drag rounded-lg px-3 py-1.5 text-sm font-medium text-white shadow-sm shadow-blue-600/20',
+            'bg-blue-600 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none',
           )}
         >
           {String(properties.submitLabel ?? 'Submit')}
@@ -181,7 +181,7 @@ function FormWidget({
             type="button"
             disabled={Boolean(properties.disabled)}
             onClick={reset}
-            className="no-drag rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="no-drag rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
           >
             {String(properties.resetLabel ?? 'Reset')}
           </button>

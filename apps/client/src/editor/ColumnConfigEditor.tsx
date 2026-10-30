@@ -3,10 +3,12 @@ import clsx from 'clsx';
 import type { ApplicationDsl } from '@swiftly/shared';
 import { control, controlCompact, dashedButton, ghostButton, Select } from './controls';
 import { ActionEditor } from './ActionEditor';
+import { IconPicker } from '@/icons/IconPicker';
 import {
   defaultActionsColumn,
   isActionsColumn,
   normaliseColumns,
+  seedDataColumns,
   TABLE_ROW_ACTION_KINDS,
   type TableColumnConfig,
   type TableRowAction,
@@ -67,13 +69,20 @@ export function ColumnConfigEditor({
   };
 
   const addActions = (): void => {
-    const seeded =
-      columns.length === 0
-        ? availableKeys.map((key) => ({ key, source: 'data' as const }))
-        : columns;
+    const seeded = columns.length === 0 ? seedDataColumns(availableKeys) : columns;
     const column = defaultActionsColumn(seeded);
     onChange([...seeded, column]);
     setExpanded(column.key);
+  };
+
+  const hideFromAuto = (key: string): void => {
+    onChange(seedDataColumns(availableKeys, [key]));
+    setExpanded(key);
+  };
+
+  const customiseFromAuto = (key?: string): void => {
+    onChange(seedDataColumns(availableKeys));
+    if (key) setExpanded(key);
   };
 
   const setActions = (index: number, actions: TableRowAction[]): void => {
@@ -86,19 +95,37 @@ export function ColumnConfigEditor({
     return (
       <div className="no-drag flex flex-col gap-1.5">
         <p className="text-[11px] leading-snug text-slate-400">
-          Showing every column the query returns. Take control of them to rename, reorder,
-          resize, format, hide, or add Edit / Delete / Download buttons.
+          Showing every column the query returns. Hide one here, or open it to rename, resize,
+          or format.
         </p>
-        <button
-          type="button"
-          disabled={availableKeys.length === 0}
-          onClick={() => onChange(availableKeys.map((key) => ({ key, source: 'data' as const })))}
-          className={clsx(dashedButton, availableKeys.length === 0 && 'opacity-50')}
-        >
-          {availableKeys.length === 0
-            ? 'Bind data first'
-            : `Configure ${availableKeys.length} columns`}
-        </button>
+        {availableKeys.length === 0 ? (
+          <p className="text-[11px] text-slate-400">Bind data first.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {availableKeys.map((key) => (
+              <li
+                key={key}
+                className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50/60 px-1.5 py-1"
+              >
+                <button
+                  type="button"
+                  onClick={() => customiseFromAuto(key)}
+                  className="min-w-0 flex-1 truncate text-left text-xs text-slate-700"
+                >
+                  {key}
+                </button>
+                <button
+                  type="button"
+                  title={`Hide ${key}`}
+                  onClick={() => hideFromAuto(key)}
+                  className={clsx(ghostButton, 'shrink-0')}
+                >
+                  Hide
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <button
           type="button"
           disabled={availableKeys.length === 0}
@@ -130,6 +157,7 @@ export function ColumnConfigEditor({
             className={clsx(
               'rounded border border-slate-200 bg-slate-50/60',
               dragging === index && 'opacity-50',
+              column.hidden && 'opacity-70',
             )}
           >
             <div className="flex items-center gap-1 p-1.5">
@@ -137,22 +165,36 @@ export function ColumnConfigEditor({
                 ⠿
               </span>
 
-              <input
-                type="checkbox"
-                checked={!column.hidden}
-                onChange={(event) => update(index, { hidden: !event.target.checked })}
-                title={column.hidden ? 'Hidden' : 'Showing'}
-                className="h-3 w-3 shrink-0 accent-blue-600"
-              />
+              <button
+                type="button"
+                draggable={false}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => update(index, { hidden: !column.hidden })}
+                title={column.hidden ? `Show ${column.label || column.key}` : `Hide ${column.label || column.key}`}
+                aria-label={column.hidden ? `Show ${column.key}` : `Hide ${column.key}`}
+                aria-pressed={Boolean(column.hidden)}
+                className={clsx(
+                  ghostButton,
+                  'flex h-6 w-6 shrink-0 items-center justify-center px-0',
+                  column.hidden ? 'text-slate-400 hover:text-slate-700' : 'text-slate-500',
+                )}
+              >
+                <VisibilityIcon hidden={Boolean(column.hidden)} />
+              </button>
 
               <button
                 type="button"
                 onClick={() => setExpanded(isOpen ? null : column.key)}
                 className="flex min-w-0 flex-1 items-center gap-1 text-left"
               >
-                <span className="truncate text-xs text-slate-700">
+                <span className={clsx('truncate text-xs', column.hidden ? 'text-slate-400' : 'text-slate-700')}>
                   {column.label || column.key}
                 </span>
+                {column.hidden && (
+                  <span className="shrink-0 rounded bg-slate-200 px-1 text-[9px] font-medium text-slate-600">
+                    hidden
+                  </span>
+                )}
                 {column.source === 'static' && (
                   <span className="shrink-0 rounded bg-violet-100 px-1 text-[9px] font-medium text-violet-700">
                     added
@@ -184,6 +226,41 @@ export function ColumnConfigEditor({
 
             {isOpen && (
               <div className="flex flex-col gap-1.5 border-t border-slate-200 p-1.5">
+                <Field label="Visibility">
+                  <div
+                    role="group"
+                    aria-label={`Visibility of ${column.key}`}
+                    className="grid grid-cols-2 gap-0.5 rounded-lg bg-slate-100 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={!column.hidden}
+                      onClick={() => update(index, { hidden: false })}
+                      className={clsx(
+                        'flex h-8 items-center justify-center rounded-md text-[11px] font-medium transition-all',
+                        !column.hidden
+                          ? 'bg-white text-slate-900 shadow-sm ring-1 ring-black/4'
+                          : 'text-slate-500 hover:text-slate-800',
+                      )}
+                    >
+                      Show
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={Boolean(column.hidden)}
+                      onClick={() => update(index, { hidden: true })}
+                      className={clsx(
+                        'flex h-8 items-center justify-center rounded-md text-[11px] font-medium transition-all',
+                        column.hidden
+                          ? 'bg-white text-slate-900 shadow-sm ring-1 ring-black/4'
+                          : 'text-slate-500 hover:text-slate-800',
+                      )}
+                    >
+                      Hidden
+                    </button>
+                  </div>
+                </Field>
+
                 <Field label="Heading">
                   <input
                     value={column.label ?? ''}
@@ -405,8 +482,10 @@ function ActionsPicker({
     }
     if (enabled.has(kind)) return;
     const order = TABLE_ROW_ACTION_KINDS.map((entry) => entry.kind);
+    const preset = TABLE_ROW_ACTION_KINDS.find((entry) => entry.kind === kind);
     onChange(
-      [...actions, { kind }].sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind)),
+      [...actions, { kind, icon: preset?.icon }]
+        .sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind)),
     );
   };
 
@@ -437,7 +516,17 @@ function ActionsPicker({
             </label>
             {current && (
               <div className="mt-1.5 flex flex-col gap-1.5">
-                <Field label="Button label">
+                <Field label="Icon" help="A React icon or an emoji. Clear it to show the label as text.">
+                  <IconPicker
+                    compact
+                    value={current.icon === undefined ? entry.icon : current.icon}
+                    onChange={(next) => patch(entry.kind, { icon: next })}
+                  />
+                </Field>
+                <Field
+                  label="Button label"
+                  help="Leave blank to show only the icon."
+                >
                   <input
                     value={current.label ?? ''}
                     placeholder={entry.label}
@@ -514,6 +603,21 @@ function ActionsPicker({
         </p>
       )}
     </div>
+  );
+}
+
+function VisibilityIcon({ hidden }: { hidden: boolean }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="M1.5 6s1.7-3.25 4.5-3.25S10.5 6 10.5 6 8.8 9.25 6 9.25 1.5 6 1.5 6Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <circle cx="6" cy="6" r="1.35" stroke="currentColor" strokeWidth="1.3" />
+      {hidden && <path d="M2 10 10 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />}
+    </svg>
   );
 }
 

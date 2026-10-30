@@ -86,7 +86,7 @@ export function AppLayoutToggle({
 }) {
   return (
     <div
-      className="flex shrink-0 items-center gap-0.5 rounded border border-slate-200 p-0.5"
+      className="flex shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5"
       role="radiogroup"
       aria-label="App layout"
     >
@@ -99,10 +99,10 @@ export function AppLayoutToggle({
           title={layout.label}
           onClick={() => onChange(layout.id)}
           className={clsx(
-            'flex h-7 w-8 items-center justify-center rounded',
+            'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
             value === layout.id
-              ? 'bg-blue-50 text-blue-700'
-              : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600',
+              ? 'bg-white text-blue-700 shadow-sm'
+              : 'text-slate-400 hover:text-slate-600',
           )}
         >
           <AppChromeGlyph style={layout.id} />

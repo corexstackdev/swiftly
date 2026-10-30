@@ -7,6 +7,7 @@ import { stateStyleProperties, stateStyleToCss } from './stateStyle';
 import { formatValue, type ValueFormat } from './formatValue';
 import { asRows, isRow } from './coerce';
 import { spacingToCss } from '@/editor/SpacingEditor';
+import { PagerBar } from './PagerBar';
 
 /**
  * The list.
@@ -44,7 +45,8 @@ function ListWidget({ properties, state, setState, fireEvent, isDesignMode }: Wi
   const fromServer = pagingMode === 'server' || pagingMode === 'infinite';
 
   const serverTotal = Number(properties.totalRows);
-  const totalRows = fromServer && Number.isFinite(serverTotal) ? serverTotal : rows.length;
+  const totalKnown = !fromServer || Number.isFinite(serverTotal);
+  const totalRows = totalKnown ? (fromServer ? serverTotal : rows.length) : rows.length;
 
   const titleKey = String(properties.titleKey ?? 'title');
   const descriptionKey = String(properties.descriptionKey ?? 'description');
@@ -83,7 +85,9 @@ function ListWidget({ properties, state, setState, fireEvent, isDesignMode }: Wi
 
   const pageCount =
     pagingMode === 'client' || pagingMode === 'server'
-      ? Math.max(1, Math.ceil(totalRows / pageSize))
+      ? totalKnown
+        ? Math.max(1, Math.ceil(totalRows / pageSize))
+        : page + (rows.length >= pageSize ? 2 : 1)
       : 1;
 
   useEffect(() => {
@@ -211,7 +215,17 @@ function ListWidget({ properties, state, setState, fireEvent, isDesignMode }: Wi
 
   const pager =
     pagingMode === 'client' || pagingMode === 'server' ? (
-      <Pager page={page} pageCount={pageCount} pageSize={pageSize} totalRows={totalRows} properties={properties} onGo={goToPage} />
+      <PagerBar
+        page={page}
+        pageCount={pageCount}
+        pageSize={pageSize}
+        pageLength={items.length}
+        totalRows={totalRows}
+        totalKnown={totalKnown}
+        properties={properties}
+        onGo={goToPage}
+        emptyRange="No items"
+      />
     ) : null;
 
   return (
@@ -471,85 +485,6 @@ function Thumbnail({
       style={{ width: size, height: size, borderRadius: radius }}
       className="shrink-0 bg-slate-100 object-cover"
     />
-  );
-}
-
-function Pager({
-  page,
-  pageCount,
-  pageSize,
-  totalRows,
-  properties,
-  onGo,
-}: {
-  page: number;
-  pageCount: number;
-  pageSize: number;
-  totalRows: number;
-  properties: Record<string, unknown>;
-  onGo: (page: number) => void;
-}) {
-  const first = totalRows === 0 ? 0 : page * pageSize + 1;
-  const last = Math.min((page + 1) * pageSize, totalRows);
-  const buttonStyle = stateStyleToCss(properties, 'pagerButton');
-
-  return (
-    <div
-      style={{
-        ...textStyleToCss(properties, 'pager'),
-        background: colour(properties, 'pagerBackground'),
-      }}
-      className="flex shrink-0 items-center gap-1.5 border-t border-slate-200 px-2 py-1 text-xs text-slate-500"
-    >
-      <span className="mr-auto tabular-nums">
-        {first.toLocaleString()}–{last.toLocaleString()} of {totalRows.toLocaleString()}
-      </span>
-      <PagerButton style={buttonStyle} disabled={page === 0} onClick={() => onGo(page - 1)} label="Previous">
-        ‹
-      </PagerButton>
-      <span className="px-1 tabular-nums">
-        {page + 1} / {pageCount}
-      </span>
-      <PagerButton
-        style={buttonStyle}
-        disabled={page >= pageCount - 1}
-        onClick={() => onGo(page + 1)}
-        label="Next"
-      >
-        ›
-      </PagerButton>
-    </div>
-  );
-}
-
-function PagerButton({
-  style,
-  disabled,
-  onClick,
-  label,
-  children,
-}: {
-  style: React.CSSProperties;
-  disabled: boolean;
-  onClick: () => void;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      style={disabled ? undefined : style}
-      className={clsx(
-        'rounded border border-slate-200 px-1.5 leading-5 transition-colors',
-        disabled ? 'cursor-not-allowed opacity-40' : 'hover:bg-slate-100',
-      )}
-    >
-      {children}
-    </button>
   );
 }
 

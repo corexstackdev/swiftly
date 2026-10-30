@@ -354,7 +354,7 @@ function CanvasGrid({
       // grid can still drag its children. Without it, a Container that holds a
       // Modal (or a Modal that holds a Form) steals the drag and moves the
       // wrapper instead of the field.
-      draggableCancel=".no-drag, .nested-canvas, input, textarea, select"
+      draggableCancel=".no-drag, .nested-canvas, input, textarea, select, button"
       resizeHandles={RESIZE_HANDLES}
       resizeHandle={(axis, handleRef) => (
         <span

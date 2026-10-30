@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { control, controlCompact } from '@/editor/controls';
+import { SearchField, control, controlCompact } from '@/editor/controls';
 import { ICON_PACKS, searchIcons, type IconEntry } from './catalog';
 import { IconGlyph, hasIcon } from './IconGlyph';
 
@@ -32,7 +32,7 @@ export function IconPicker({
   return (
     <div className="no-drag flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-slate-200 bg-white text-slate-700">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 shadow-sm">
           {hasIcon(current) ? <IconGlyph name={current} size={16} /> : (
             <span className="text-[10px] text-slate-300">—</span>
           )}
@@ -58,19 +58,20 @@ export function IconPicker({
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
-        className="self-start rounded px-1.5 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        className="self-start rounded-md px-1.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"
       >
         {open ? 'Hide icons' : 'Browse React Icons'}
       </button>
 
       {open && (
-        <div className="rounded border border-slate-200 bg-white p-1.5">
-          <input
+        <div className="rounded-lg border border-slate-200 bg-white p-1.5 shadow-sm">
+          <SearchField
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={setQuery}
             placeholder="Search home, table, cart…"
-            className={clsx(controlCompact, 'mb-1.5')}
+            compact
             autoFocus
+            className="mb-1.5"
           />
           <div className="mb-1.5 flex flex-wrap gap-1">
             <PackChip label="All" current={pack === 'all'} onClick={() => setPack('all')} />
@@ -96,7 +97,7 @@ export function IconPicker({
                     setOpen(false);
                   }}
                   className={clsx(
-                    'flex h-8 items-center justify-center rounded text-slate-700 hover:bg-slate-100',
+                    'flex h-8 items-center justify-center rounded-md text-slate-700 hover:bg-slate-100',
                     selected && 'bg-blue-50 text-blue-700 ring-1 ring-blue-400',
                   )}
                 >
@@ -132,7 +133,7 @@ function PackChip({
       type="button"
       onClick={onClick}
       className={clsx(
-        'rounded px-1.5 py-0.5 text-[10px]',
+        'rounded-md px-1.5 py-0.5 text-[10px] font-medium',
         current ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
       )}
     >

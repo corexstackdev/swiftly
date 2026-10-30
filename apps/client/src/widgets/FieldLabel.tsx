@@ -74,7 +74,7 @@ export function FieldLabel({
         color: '#475569',
         ...style,
       }}
-      className="flex items-center gap-1.5"
+      className="flex items-center gap-1.5 tracking-tight"
     >
       {showIcon && <IconGlyph name={glyph} size={14} className="shrink-0" />}
 

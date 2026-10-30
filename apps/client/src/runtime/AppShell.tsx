@@ -3,6 +3,18 @@ import clsx from 'clsx';
 import type { NavItemDsl, NavigationDsl, ThemeDsl } from '@swiftly/shared';
 import type { AppRuntime, Notification } from './useAppRuntime';
 import { IconGlyph, hasIcon } from '@/icons/IconGlyph';
+import {
+  currentSidebarWidth,
+  navAppearanceOf,
+  sidebarCollapseClass,
+  sidebarItemClass,
+  sidebarShellClass,
+  sidebarShellStyle,
+  sidebarSideOf,
+  sidebarTitleClass,
+  topbarShellClass,
+  topbarShellStyle,
+} from './navChrome';
 
 /**
  * App chrome: navigation and notifications, rendered around every page.
@@ -27,50 +39,69 @@ export function AppShell({
 }) {
   const [collapsed, setCollapsed] = useState(navigation.collapsedByDefault ?? false);
   const accent = theme?.primaryColor || '#2563eb';
+  const appearance = navAppearanceOf(navigation);
+  const side = sidebarSideOf(navigation);
+  const width = currentSidebarWidth(navigation, collapsed);
+
+  const sidebar =
+    navigation.style === 'sidebar' ? (
+      <nav
+        className={clsx(
+          'flex h-full min-h-0 shrink-0 flex-col self-stretch transition-[width]',
+          sidebarShellClass(appearance, side),
+        )}
+        style={sidebarShellStyle(appearance, accent, width)}
+      >
+        <div className="flex items-center justify-between gap-2 px-3 py-3">
+          {!collapsed && (
+            <span className={clsx('truncate text-sm font-semibold tracking-tight', sidebarTitleClass(appearance))}>
+              {navigation.title ?? 'Menu'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setCollapsed((previous) => !previous)}
+            className={clsx('rounded p-1', sidebarCollapseClass(appearance))}
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          >
+            {collapsed ? (side === 'right' ? '«' : '»') : side === 'right' ? '»' : '«'}
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
+          <NavList
+            items={navigation.items}
+            runtime={runtime}
+            collapsed={collapsed}
+            depth={0}
+            accent={accent}
+            appearance={appearance}
+          />
+        </div>
+      </nav>
+    ) : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-white">
       {header}
 
-      <div className="flex min-h-0 flex-1">
-        {navigation.style === 'sidebar' && (
-          <nav
-            className={clsx(
-              'flex shrink-0 flex-col border-r border-slate-200 bg-slate-950 text-slate-200 transition-all',
-              collapsed ? 'w-14' : 'w-56',
-            )}
-          >
-            <div className="flex items-center justify-between gap-2 px-3 py-3">
-              {!collapsed && (
-                <span className="truncate text-sm font-semibold tracking-tight text-white">
-                  {navigation.title ?? 'Menu'}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => setCollapsed((previous) => !previous)}
-                className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-white"
-                aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-              >
-                {collapsed ? '»' : '«'}
-              </button>
-            </div>
-            <div className="flex-1 overflow-auto px-2 pb-3">
-              <NavList
-                items={navigation.items}
-                runtime={runtime}
-                collapsed={collapsed}
-                depth={0}
-                accent={accent}
-              />
-            </div>
-          </nav>
+      <div
+        className={clsx(
+          'flex min-h-0 flex-1 items-stretch',
+          side === 'right' && navigation.style === 'sidebar' && 'flex-row-reverse',
         )}
+      >
+        {sidebar}
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {navigation.style === 'topbar' && (
-            <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2">
-              <span className="mr-3 text-sm font-semibold text-slate-800">
+            <nav
+              className={clsx(
+                'flex shrink-0 items-center gap-1 overflow-x-auto px-4 py-2',
+                topbarShellClass(appearance),
+              )}
+              style={topbarShellStyle(appearance, accent)}
+            >
+              <span className={clsx('mr-3 text-sm font-semibold', sidebarTitleClass(appearance))}>
                 {navigation.title ?? ''}
               </span>
               <NavList
@@ -80,6 +111,7 @@ export function AppShell({
                 depth={0}
                 horizontal
                 accent={accent}
+                appearance={appearance}
               />
             </nav>
           )}
@@ -102,6 +134,7 @@ function NavList({
   depth,
   horizontal = false,
   accent,
+  appearance,
 }: {
   items: NavItemDsl[];
   runtime: AppRuntime;
@@ -109,6 +142,7 @@ function NavList({
   depth: number;
   horizontal?: boolean;
   accent: string;
+  appearance: ReturnType<typeof navAppearanceOf>;
 }) {
   return (
     <ul className={clsx(horizontal ? 'flex items-center gap-1' : 'flex flex-col gap-0.5')}>
@@ -121,6 +155,7 @@ function NavList({
           depth={depth}
           horizontal={horizontal}
           accent={accent}
+          appearance={appearance}
         />
       ))}
     </ul>
@@ -134,6 +169,7 @@ function NavEntry({
   depth,
   horizontal,
   accent,
+  appearance,
 }: {
   item: NavItemDsl;
   runtime: AppRuntime;
@@ -141,6 +177,7 @@ function NavEntry({
   depth: number;
   horizontal: boolean;
   accent: string;
+  appearance: ReturnType<typeof navAppearanceOf>;
 }) {
   const [expanded, setExpanded] = useState(true);
   const isActive = item.target.kind === 'page' && item.target.pageId === runtime.currentPageId;
@@ -165,19 +202,16 @@ function NavEntry({
         title={collapsed ? item.label : undefined}
         style={{
           paddingLeft: horizontal ? undefined : 8 + depth * 12,
-          ...(isActive && !horizontal
-            ? { background: `${accent}33`, color: '#ffffff' }
-            : isActive
-              ? { background: `${accent}18`, color: accent }
-              : undefined),
+          ...(isActive
+            ? {
+                background: `${accent}33`,
+                color: appearance === 'light' ? accent : '#ffffff',
+              }
+            : undefined),
         }}
         className={clsx(
           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-          isActive
-            ? 'font-medium'
-            : horizontal
-              ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              : 'text-slate-300 hover:bg-white/10 hover:text-white',
+          isActive ? 'font-medium' : sidebarItemClass(appearance, horizontal),
         )}
       >
         {hasIcon(item.icon) && !collapsed ? (
@@ -205,6 +239,7 @@ function NavEntry({
           depth={depth + 1}
           horizontal={false}
           accent={accent}
+          appearance={appearance}
         />
       )}
     </li>

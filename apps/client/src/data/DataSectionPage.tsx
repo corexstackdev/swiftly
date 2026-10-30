@@ -505,6 +505,7 @@ function DatasourceDetail({
 
       {tab === 'data' ? (
         <SchemaWorkbench
+          key={`${datasource.id}:${environmentId}`}
           applicationId={applicationId}
           datasource={datasource}
           plugin={plugin}

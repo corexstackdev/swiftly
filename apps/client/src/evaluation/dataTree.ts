@@ -205,6 +205,46 @@ export function boundQueryNames(widgets: WidgetDsl[]): string[] {
   return [...names];
 }
 
+const SERVER_PAGE_MODES = new Set(['server', 'infinite']);
+
+function positiveInt(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function nonNegativeInt(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
+/**
+ * LIMIT/OFFSET a server-paged table (or list) wants for this query. Seeded from
+ * the widget DSL when state has not been written yet, so the first auto-run
+ * still fetches page one rather than the query's own default limit.
+ */
+export function boundServerPageWindow(
+  widgets: WidgetDsl[],
+  queryName: string,
+  widgetState: Record<string, Record<string, unknown>>,
+): { limit: number; offset: number } | null {
+  if (!queryName) return null;
+  let found: { limit: number; offset: number } | null = null;
+  walkWidgets(widgets, (widget) => {
+    if (found) return;
+    if (widget.properties.sourceKind !== 'query') return;
+    const bound =
+      typeof widget.properties.sourceQuery === 'string' ? widget.properties.sourceQuery.trim() : '';
+    if (bound !== queryName) return;
+    if (!SERVER_PAGE_MODES.has(String(widget.properties.paging ?? ''))) return;
+    const state = widgetState[widget.name] ?? {};
+    found = {
+      limit: positiveInt(state.pageSize, positiveInt(widget.properties.pageSize, 25)),
+      offset: nonNegativeInt(state.pageOffset, 0),
+    };
+  });
+  return found;
+}
+
 /**
  * Rows/options come from the query runtime, not from a leftover JSON property or
  * a worker tick that has not caught up yet. Mapping `sourceQuery` is enough.

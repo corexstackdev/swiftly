@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import {
   jsObjectsOnPage,
   queriesOnPage,
+  resolveSidebarWidth,
   widgetsForPageLayout,
   type ApplicationDsl,
   type AppLayoutId,
@@ -32,7 +33,7 @@ import { isFixedModal, modalRowsFromHeightPx } from '@/widgets/layout';
 import { useDslHistory } from './useDslHistory';
 import { Canvas } from './Canvas';
 import { acceptPaletteDrag, dropParentId, dropSeed, takePaletteDrop } from './paletteDrag';
-import { DESIGN_SIDEBAR_WIDTH, DesignAppFrame } from './DesignAppFrame';
+import { DesignAppFrame } from './DesignAppFrame';
 import { AppLayoutToggle } from './LayoutOptions';
 import { EntityPanel } from './EntityPanel';
 import { PagesDropdown } from './PagesDropdown';
@@ -450,8 +451,11 @@ function EditorBody({
   const canvasWidth =
     presetWidth ?? Math.max(availableWidth - CANVAS_GUTTER * 2, MIN_CANVAS_WIDTH);
   const showDesignSidebar = history.dsl.navigation.style === 'sidebar';
+  const designSidebarWidth = showDesignSidebar
+    ? resolveSidebarWidth(history.dsl.navigation.sidebarWidth)
+    : 0;
   const gridWidth = showDesignSidebar
-    ? Math.max(MIN_CANVAS_WIDTH, canvasWidth - DESIGN_SIDEBAR_WIDTH)
+    ? Math.max(MIN_CANVAS_WIDTH, canvasWidth - designSidebarWidth)
     : canvasWidth;
 
   useLayoutEffect(() => {
@@ -1303,9 +1307,8 @@ function EditorBody({
                * removed the vertical one again, and the two flickered against each
                * other.
                */
-              className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-slate-100"
+              className="min-h-0 flex-1 overflow-hidden bg-slate-100"
               style={{
-                scrollbarGutter: 'stable',
                 paddingInline: CANVAS_GUTTER,
                 paddingTop: CANVAS_TOP_GUTTER,
                 paddingBottom: CANVAS_GUTTER,
@@ -1328,13 +1331,12 @@ function EditorBody({
                   The frame is exactly as wide as the grid inside it — clamping the
                   frame while the grid rendered at the target width left widgets
                   spilling past the edge of the page they are supposedly on. */}
-              <div className="min-h-full" style={{ width: canvasWidth }}>
+              <div className="h-full" style={{ width: canvasWidth }}>
                 <DesignAppFrame
                   navigation={history.dsl.navigation}
                   pages={history.dsl.pages}
                   currentPageId={currentPageId}
                   theme={history.dsl.theme}
-                  sidebarWidth={DESIGN_SIDEBAR_WIDTH}
                   onNavigate={(pageId) => {
                     setCurrentPageId(pageId);
                     setSelectedWidgetId(null);

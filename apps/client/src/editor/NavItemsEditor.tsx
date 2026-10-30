@@ -1,5 +1,6 @@
 import type { ApplicationDsl, NavItemDsl, NavTarget } from '@swiftly/shared';
 import { IconPicker } from '@/icons/IconPicker';
+import { control, dashedButton } from './controls';
 
 /**
  * Edits the app's navigation items — the sidebar or top bar the runtime renders
@@ -176,7 +177,7 @@ export function NavItemsEditor({
             'nav-add',
           );
         }}
-        className="rounded border border-dashed border-slate-300 px-2 py-1.5 text-xs text-slate-600 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700"
+        className={dashedButton}
       >
         + Add link
       </button>
@@ -184,8 +185,7 @@ export function NavItemsEditor({
   );
 }
 
-const inputClass =
-  'w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800 outline-none focus:border-blue-500';
+const inputClass = control;
 
 const iconButton =
   'rounded px-1.5 py-0.5 text-xs text-slate-400 hover:bg-white hover:text-slate-700 disabled:opacity-30';

@@ -30,9 +30,12 @@ import { IconGlyph } from '@/icons/IconGlyph';
  */
 
 const VARIANTS: Record<string, string> = {
-  primary: 'border border-transparent bg-blue-600 text-white hover:bg-blue-700',
-  secondary: 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
-  danger: 'border border-transparent bg-red-600 text-white hover:bg-red-700',
+  primary:
+    'border border-transparent bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700',
+  secondary:
+    'border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50',
+  danger:
+    'border border-transparent bg-red-600 text-white shadow-sm shadow-red-600/20 hover:bg-red-700',
   ghost: 'border border-transparent bg-transparent text-slate-700 hover:bg-slate-100',
 };
 
@@ -101,17 +104,24 @@ function ButtonWidget({ properties, state, setState, fireEvent, isDesignMode }: 
       title={properties.tooltip ? String(properties.tooltip) : display === 'icon' ? label : undefined}
       style={style}
       className={clsx(
-        'flex h-full w-full items-center gap-1.5 text-sm font-medium transition-colors',
+        'flex h-full w-full items-center gap-1.5 text-sm font-medium transition-all duration-150',
+        'focus-visible:ring-[3px] focus-visible:ring-blue-500/25 focus-visible:outline-none',
         JUSTIFY[String(properties.align ?? 'center')],
         // The preset is the starting point; anything set above overrides it,
         // because an inline style beats a class.
         VARIANTS[String(properties.variant ?? 'primary')] ?? VARIANTS.primary,
-        disabled && 'cursor-not-allowed opacity-50',
-        !disabled && !isDesignMode && 'cursor-pointer',
+        disabled && 'cursor-not-allowed opacity-50 shadow-none',
+        !disabled && !isDesignMode && 'cursor-pointer active:scale-[0.99]',
       )}
     >
       {loading ? (
-        <span className="truncate">Working…</span>
+        <>
+          <span
+            className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent"
+            aria-hidden="true"
+          />
+          <span className="truncate">Working…</span>
+        </>
       ) : (
         <>
           {display !== 'text' && properties.iconPosition !== 'right' && (

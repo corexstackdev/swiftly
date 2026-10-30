@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import {
   isAppLevelEntity,
@@ -15,6 +16,7 @@ import { WidgetPalette } from './WidgetPalette';
 import { WidgetTree } from './WidgetTree';
 import { JsObjectMenuButton } from './JsObjectMenu';
 import { QueryMenuButton } from './QueryMenu';
+import { Chevron } from './controls';
 
 /**
  * The entity panel: the one place things get added.
@@ -140,15 +142,31 @@ export function EntityPanel({
 
         {tab === 'queries' && (
           <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-slate-200 px-2 py-1.5">
-              <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+            <div className="flex min-w-0 items-center justify-between gap-2 border-b border-slate-200 px-2 py-1.5">
+              <span className="min-w-0 truncate text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
                 Queries
               </span>
-              <select
-                value=""
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (!value) return;
+              <NewMenu
+                title="New query"
+                disabled={datasources.length === 0}
+                disabledTitle="Connect a datasource in the Data section first"
+                groups={[
+                  {
+                    label: 'Global (every page)',
+                    items: datasources.map((datasource) => ({
+                      value: `app:${datasource.id}`,
+                      label: datasource.name,
+                    })),
+                  },
+                  {
+                    label: 'This page',
+                    items: datasources.map((datasource) => ({
+                      value: `page:${datasource.id}`,
+                      label: datasource.name,
+                    })),
+                  },
+                ]}
+                onSelect={(value) => {
                   const separator = value.indexOf(':');
                   const scope = value.slice(0, separator);
                   const datasourceId = value.slice(separator + 1);
@@ -156,25 +174,7 @@ export function EntityPanel({
                     onCreateQuery(datasourceId, scope);
                   }
                 }}
-                className="rounded border border-slate-300 px-1 py-0.5 text-xs"
-                disabled={datasources.length === 0}
-              >
-                <option value="">+ New</option>
-                <optgroup label="Global (every page)">
-                  {datasources.map((datasource) => (
-                    <option key={`app-${datasource.id}`} value={`app:${datasource.id}`}>
-                      {datasource.name}
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="This page">
-                  {datasources.map((datasource) => (
-                    <option key={`page-${datasource.id}`} value={`page:${datasource.id}`}>
-                      {datasource.name}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
+              />
             </div>
 
             <ul className="flex-1 overflow-auto p-1">
@@ -242,22 +242,25 @@ export function EntityPanel({
 
         {tab === 'js' && (
           <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-slate-200 px-2 py-1.5">
-              <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+            <div className="flex min-w-0 items-center justify-between gap-2 border-b border-slate-200 px-2 py-1.5">
+              <span className="min-w-0 truncate text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
                 JS objects
               </span>
-              <select
-                value=""
-                onChange={(event) => {
-                  const value = event.target.value;
+              <NewMenu
+                title="New JS object"
+                groups={[
+                  {
+                    label: 'Scope',
+                    items: [
+                      { value: 'page', label: 'On this page' },
+                      { value: 'app', label: 'Global (app)' },
+                    ],
+                  },
+                ]}
+                onSelect={(value) => {
                   if (value === 'page' || value === 'app') onCreateJsObject(value);
                 }}
-                className="rounded border border-slate-300 px-1 py-0.5 text-xs"
-              >
-                <option value="">+ New</option>
-                <option value="page">On this page</option>
-                <option value="app">Global (app)</option>
-              </select>
+              />
             </div>
 
             <ul className="flex-1 overflow-auto p-1">
@@ -364,6 +367,174 @@ function ScopeBadge() {
     <span className="shrink-0 rounded bg-slate-100 px-1 py-px text-[9px] font-medium tracking-wide text-slate-500 uppercase">
       App
     </span>
+  );
+}
+
+type NewMenuGroup = {
+  label: string;
+  items: { value: string; label: string }[];
+};
+
+/**
+ * Compact + New control. A native <select> sizes itself to the longest option
+ * ("Orders Warehouse"), which shoved the closed control out of this narrow
+ * panel and dropped the open list off the right of the screen.
+ */
+function NewMenu({
+  title,
+  groups,
+  disabled,
+  disabledTitle,
+  onSelect,
+}: {
+  title: string;
+  groups: NewMenuGroup[];
+  disabled?: boolean;
+  disabledTitle?: string;
+  onSelect: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 220 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const close = (): void => setOpen(false);
+
+  const place = (): void => {
+    const anchor = buttonRef.current;
+    const menu = menuRef.current;
+    if (!anchor) return;
+
+    const rect = anchor.getBoundingClientRect();
+    const gap = 4;
+    const maxWidth = Math.min(280, window.innerWidth - 16);
+    const menuWidth = Math.min(Math.max(menu?.offsetWidth ?? 220, 180), maxWidth);
+    const menuHeight = menu?.offsetHeight ?? 160;
+    // Grow left from the trigger so a long datasource name cannot spill off
+    // the right of the screen.
+    let left = rect.right - menuWidth;
+    let top = rect.bottom + gap;
+    if (left < 8) left = 8;
+    if (left + menuWidth > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - menuWidth - 8);
+    }
+    if (top + menuHeight > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - menuHeight - gap);
+    }
+    setPos({ top, left, width: menuWidth });
+  };
+
+  const toggle = (): void => {
+    if (disabled) return;
+    if (open) {
+      close();
+      return;
+    }
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) {
+      const width = 220;
+      setPos({
+        top: rect.bottom + 4,
+        left: Math.max(8, rect.right - width),
+        width,
+      });
+    }
+    setOpen(true);
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: MouseEvent): void => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        close();
+      }
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        title={disabled ? disabledTitle : title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={title}
+        onClick={toggle}
+        className={clsx(
+          'flex shrink-0 items-center gap-0.5 rounded-md border px-1.5 py-0.5 text-xs font-medium transition-colors',
+          disabled
+            ? 'cursor-not-allowed border-slate-200 text-slate-300'
+            : 'border-slate-300 text-slate-600 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700',
+        )}
+      >
+        + New
+        <Chevron className="text-current" />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label="New"
+            style={{ top: pos.top, left: pos.left, width: pos.width }}
+            className="fixed z-[80] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+          >
+            {groups.map((group) =>
+              group.items.length === 0 ? null : (
+                <div key={group.label}>
+                  <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">
+                    {group.label}
+                  </div>
+                  {group.items.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      role="menuitem"
+                      title={item.label}
+                      onClick={() => {
+                        onSelect(item.value);
+                        close();
+                      }}
+                      className="flex w-full items-center px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                    >
+                      <span className="min-w-0 truncate">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ),
+            )}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 

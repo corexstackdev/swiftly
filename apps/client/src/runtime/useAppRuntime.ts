@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   jsObjectsOnPage,
+  PAGE_WINDOW_LIMIT_BINDING,
+  PAGE_WINDOW_OFFSET_BINDING,
   queriesOnPage,
   type ActionDsl,
   type ApplicationDsl,
@@ -16,6 +18,7 @@ import { useEvaluation } from '@/evaluation/useEvaluation';
 import {
   applyQuerySource,
   boundQueryNames,
+  boundServerPageWindow,
   buildDataTree,
   collectQueryExpressions,
   emptyQueryState,
@@ -273,6 +276,16 @@ export function useAppRuntime(options: RuntimeOptions): AppRuntime {
         for (const [key, value] of Object.entries(state)) {
           values[`${entity}.${key}`] = value === undefined ? null : value;
         }
+      }
+
+      const pageWindow = boundServerPageWindow(
+        currentPage.widgets,
+        queryName,
+        widgetStateRef.current,
+      );
+      if (pageWindow) {
+        values[PAGE_WINDOW_LIMIT_BINDING] = pageWindow.limit;
+        values[PAGE_WINDOW_OFFSET_BINDING] = pageWindow.offset;
       }
 
       return values;

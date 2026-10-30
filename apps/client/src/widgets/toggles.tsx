@@ -12,6 +12,8 @@ import {
   emptyChoiceHint,
   normaliseChoiceOptions,
 } from './choiceSource';
+import { ChoiceMark } from './ChoiceMark';
+import { fieldErrorClass } from './fieldChrome';
 
 /**
  * Boolean and choice inputs.
@@ -24,13 +26,8 @@ import {
 /**
  * The tick, the dot, the filled track.
  *
- * `accent-color` is how a native checkbox or radio is recoloured — the browser
- * draws the control and takes this as the fill, which keeps the platform's own
- * focus ring, sizing and high-contrast handling rather than reimplementing a
- * control in divs and losing all three.
- *
- * Undefined leaves the Tailwind class in place, so a widget nobody has recoloured
- * still follows the theme.
+ * Accent is the fill of the custom mark. Undefined follows the theme blue so a
+ * widget nobody has recoloured still looks like the rest of the form.
  */
 function accentOf(properties: Record<string, unknown>): string | undefined {
   const accent = properties.accentColor;
@@ -181,17 +178,16 @@ function CheckboxWidget({ properties, state, setState, fireEvent, isDesignMode }
   const checked = Boolean(seeded);
 
   return (
-    <label className="flex h-full w-full cursor-pointer items-center gap-2">
-      <input
+    <label className="flex h-full w-full cursor-pointer items-center gap-2.5">
+      <ChoiceMark
         type="checkbox"
         checked={checked}
         disabled={Boolean(properties.disabled)}
-        onChange={(event) => {
-          setState({ value: event.target.checked });
-          fireEvent('onChange', { value: event.target.checked });
+        accent={accentOf(properties)}
+        onChange={() => {
+          setState({ value: !checked });
+          fireEvent('onChange', { value: !checked });
         }}
-        style={{ accentColor: accentOf(properties) }}
-        className="no-drag h-4 w-4 shrink-0 accent-blue-600"
       />
       {/* A span, not a label: this row is already one, and the caption is the
           control's name through it. */}
@@ -253,14 +249,16 @@ function SwitchWidget({ properties, state, setState, fireEvent, isDesignMode }: 
         }}
         style={checked ? { background: accentOf(properties) } : undefined}
         className={clsx(
-          'no-drag relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50',
+          'no-drag relative h-6 w-11 shrink-0 rounded-full transition-colors duration-150',
+          'focus-visible:ring-[3px] focus-visible:ring-blue-500/25 focus-visible:outline-none',
+          'disabled:opacity-50',
           checked ? 'bg-blue-600' : 'bg-slate-300',
         )}
       >
         <span
           className={clsx(
-            'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
-            checked ? 'translate-x-4.5' : 'translate-x-0.5',
+            'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-150',
+            checked ? 'translate-x-[22px]' : 'translate-x-0.5',
           )}
         />
       </button>
@@ -325,21 +323,18 @@ function RadioGroupWidget({ widget, properties, state, setState, fireEvent, isDe
         {options.map((option, index) => (
           <label
             key={index}
-            className={clsx('flex cursor-pointer items-center gap-2', horizontal && 'shrink-0')}
+            className={clsx('flex cursor-pointer items-center gap-2.5', horizontal && 'shrink-0')}
           >
-            <input
+            <ChoiceMark
               type="radio"
-              // Grouping is by widget name, so two radio groups on one page do not
-              // fight over the same browser-level name.
               name={widget.name}
               checked={option.value === selected}
               disabled={Boolean(properties.disabled)}
+              accent={accentOf(properties)}
               onChange={() => {
                 setState({ value: option.value, selectedLabel: option.label });
                 fireEvent('onChange', { value: option.value });
               }}
-              style={{ accentColor: accentOf(properties) }}
-              className="no-drag h-4 w-4 shrink-0 accent-blue-600"
             />
             <span
               className={horizontal ? 'whitespace-nowrap' : 'min-w-0 truncate'}
@@ -354,7 +349,7 @@ function RadioGroupWidget({ widget, properties, state, setState, fireEvent, isDe
           <span className="text-xs text-slate-400">{emptyChoiceHint(properties)}</span>
         )}
       </div>
-      {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
+      {dataError ? <p className={fieldErrorClass}>{dataError}</p> : null}
     </div>
   );
 }
@@ -427,15 +422,14 @@ function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetP
             {options.map((option, index) => (
               <label
                 key={index}
-                className={clsx('flex cursor-pointer items-center gap-2', horizontal && 'shrink-0')}
+                className={clsx('flex cursor-pointer items-center gap-2.5', horizontal && 'shrink-0')}
               >
-                <input
+                <ChoiceMark
                   type="checkbox"
                   checked={selected.includes(option.value)}
                   disabled={Boolean(properties.disabled)}
+                  accent={accentOf(properties)}
                   onChange={() => toggle(option.value)}
-                  style={{ accentColor: accentOf(properties) }}
-                  className="no-drag h-4 w-4 shrink-0 accent-blue-600"
                 />
                 <span
                   className={horizontal ? 'whitespace-nowrap' : 'min-w-0 truncate'}
@@ -450,7 +444,7 @@ function CheckboxGroupWidget({ properties, state, setState, fireEvent }: WidgetP
               <span className="text-xs text-slate-400">{emptyChoiceHint(properties)}</span>
             )}
           </div>
-          {dataError ? <p className="mt-1 text-xs text-red-600">{dataError}</p> : null}
+          {dataError ? <p className={clsx('mt-1', fieldErrorClass)}>{dataError}</p> : null}
         </div>
       </div>
     </div>

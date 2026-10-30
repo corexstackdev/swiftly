@@ -13,6 +13,7 @@ import {
   normaliseChoiceOptions,
   type ChoiceOption,
 } from './choiceSource';
+import { fieldErrorClass, fieldSurfaceClass } from './fieldChrome';
 
 /**
  * Select / combobox.
@@ -138,17 +139,30 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
           <div
             ref={menuRef}
             role="listbox"
-            className="no-drag fixed z-[200] rounded border border-slate-200 bg-white shadow-lg"
+            className="no-drag fixed z-[200] overflow-hidden rounded-xl border border-slate-200/80 bg-white/95 shadow-xl shadow-slate-900/10 ring-1 ring-black/5 backdrop-blur"
             style={{ top: pos.top, left: pos.left, width: pos.width }}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <input
-              autoFocus
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search"
-              className="no-drag w-full border-b border-slate-200 px-2 py-1.5 text-sm outline-none"
-            />
+            <div className="relative border-b border-slate-100">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                fill="none"
+                aria-hidden="true"
+                className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-slate-400"
+              >
+                <circle cx="5" cy="5" r="3.25" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M7.4 7.4 10 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+              <input
+                autoFocus
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search"
+                className="no-drag w-full bg-transparent py-2 pr-2 pl-8 text-sm outline-none placeholder:text-slate-400"
+              />
+            </div>
             <div ref={listRef} className="overflow-auto pt-1" style={{ maxHeight: pos.maxHeight }}>
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -174,19 +188,32 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
                       className={clsx(
-                        'flex items-center px-2 text-left text-sm hover:bg-slate-50',
-                        option.value === state.value && 'bg-blue-50 text-blue-700',
+                        'flex items-center gap-2 px-2.5 text-left text-sm',
+                        option.value === state.value
+                          ? 'bg-blue-50 font-medium text-blue-700'
+                          : 'text-slate-700 hover:bg-slate-50',
                       )}
                     >
-                      <span className="truncate" style={valueStyle}>
+                      <span className="min-w-0 flex-1 truncate" style={valueStyle}>
                         {option.label}
                       </span>
+                      {option.value === state.value && (
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="shrink-0">
+                          <path
+                            d="M2.5 6.2 4.8 8.4 9.5 3.5"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      )}
                     </button>
                   );
                 })}
               </div>
               {filtered.length === 0 && (
-                <div className="px-2 py-3 text-sm text-slate-400">
+                <div className="px-3 py-4 text-center text-sm text-slate-400">
                   {dataError ?? (options.length === 0 ? emptyChoiceHint(properties) : 'No matches')}
                 </div>
               )}
@@ -230,19 +257,36 @@ function SelectWidget({ properties, state, setState, fireEvent }: WidgetProps) {
           }}
           style={valueStyle}
           className={clsx(
-            'no-drag flex h-full w-full items-center justify-between rounded border border-slate-300 bg-white px-2 text-left',
-            'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 focus:outline-none',
-            'disabled:bg-slate-50 disabled:text-slate-400',
+            'flex h-full w-full items-center justify-between text-left',
+            fieldSurfaceClass(Boolean(dataError)),
           )}
         >
           <span className={clsx('truncate', !selected && 'text-slate-400')}>
             {selected ? selected.label : placeholder}
           </span>
-          <span className="ml-2 shrink-0 text-slate-400">▾</span>
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            aria-hidden="true"
+            className={clsx(
+              'ml-2 shrink-0 text-slate-400 transition-transform duration-150',
+              open && 'rotate-180',
+            )}
+          >
+            <path
+              d="M2.5 4.5 6 8 9.5 4.5"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
         {menu}
       </div>
-      {dataError ? <p className="text-xs text-red-600">{dataError}</p> : null}
+      {dataError ? <p className={fieldErrorClass}>{dataError}</p> : null}
     </div>
   );
 }

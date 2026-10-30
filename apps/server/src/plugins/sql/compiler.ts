@@ -1,10 +1,11 @@
-import type {
-  BuilderDefinition,
-  BuilderFilter,
-  FunctionDefinition,
-  QueryDefinition,
-  RawSqlDefinition,
-  StoredProcedureDefinition,
+import {
+  sqlAlreadyHasPageClause,
+  type BuilderDefinition,
+  type BuilderFilter,
+  type FunctionDefinition,
+  type QueryDefinition,
+  type RawSqlDefinition,
+  type StoredProcedureDefinition,
 } from '@swiftly/shared';
 import {
   classifyStatement,
@@ -95,16 +96,33 @@ function compileRawSql(definition: RawSqlDefinition, dialect: SqlDialect): Compi
     definition.identifierAllowlist ?? [],
   );
   // Everything a raw statement parameterises came out of a `{{ }}`, so every
-  // parameter there is an expression.
+  // parameter there is an expression. A page-window LIMIT/OFFSET is appended as
+  // a literal after that, so it does not have to appear in the author's SQL.
   const parameters: ParameterSource[] = extracted.expressions.map((text) => ({
     kind: 'expression',
     text,
   }));
 
+  let sql = extracted.sql;
+  if (
+    (definition.limit || definition.offset) &&
+    !sqlAlreadyHasPageClause(definition.sql)
+  ) {
+    const next = () => DIALECTS[dialect]!.placeholder(parameters.length);
+    sql = appendPageWindow(
+      sql,
+      dialect,
+      next,
+      parameters,
+      definition.limit,
+      definition.offset,
+    );
+  }
+
   return {
-    sql: extracted.sql,
+    sql,
     parameters,
-    expressions: extracted.expressions,
+    expressions: expressionsOf(parameters),
     identifierBindings: extracted.identifierBindings,
     statementType: classifyStatement(definition.sql),
     outputParameters: [],
@@ -273,16 +291,14 @@ function compileBuilder(
       });
       sql += ` ORDER BY ${order.join(', ')}`;
     }
-    if (definition.limit) {
-      const placeholder = next();
-      parameters.push(toParameterSource(definition.limit));
-      sql += dialect === 'mssql' ? ` OFFSET 0 ROWS FETCH NEXT ${placeholder} ROWS ONLY` : ` LIMIT ${placeholder}`;
-    }
-    if (definition.offset && dialect !== 'mssql') {
-      const placeholder = next();
-      parameters.push(toParameterSource(definition.offset));
-      sql += ` OFFSET ${placeholder}`;
-    }
+    sql = appendPageWindow(
+      sql,
+      dialect,
+      next,
+      parameters,
+      definition.limit,
+      definition.offset,
+    );
   }
 
   return {
@@ -336,6 +352,48 @@ function renderFilter(
       return `${column} ${operator} ${placeholder}`;
     }
   }
+}
+
+/**
+ * Dialect-specific LIMIT/OFFSET (or OFFSET/FETCH). A newline precedes LIMIT so a
+ * trailing `-- comment` cannot swallow the clause. OFFSET without ORDER BY is not
+ * a stable window, so a missing sort becomes `ORDER BY 1` (first select column).
+ */
+function appendPageWindow(
+  sql: string,
+  dialect: SqlDialect,
+  next: () => string,
+  parameters: ParameterSource[],
+  limit: string | undefined,
+  offset: string | undefined,
+): string {
+  if (!limit && !offset) return sql;
+  let nextSql = sql.replace(/;+\s*$/, '').trimEnd();
+  if (!/(?<![\w."`\[\]])\bORDER\s+BY\b/i.test(nextSql)) {
+    nextSql += ` ORDER BY 1`;
+  }
+  if (dialect === 'mssql') {
+    const offsetPlaceholder = next();
+    parameters.push(toParameterSource(offset ?? '0'));
+    nextSql += ` OFFSET ${offsetPlaceholder} ROWS`;
+    if (limit) {
+      const limitPlaceholder = next();
+      parameters.push(toParameterSource(limit));
+      nextSql += ` FETCH NEXT ${limitPlaceholder} ROWS ONLY`;
+    }
+    return nextSql;
+  }
+  if (limit) {
+    const placeholder = next();
+    parameters.push(toParameterSource(limit));
+    nextSql += `\nLIMIT ${placeholder}`;
+  }
+  if (offset) {
+    const placeholder = next();
+    parameters.push(toParameterSource(offset));
+    nextSql += ` OFFSET ${placeholder}`;
+  }
+  return nextSql;
 }
 
 /**

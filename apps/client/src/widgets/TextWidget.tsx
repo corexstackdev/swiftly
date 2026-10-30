@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { RegisteredWidget, WidgetProps } from './types';
 import { formatValue, type ValueFormat } from './formatValue';
 import { textStyleProperties, textStyleToCss } from './textStyle';
 import { spacingToCss } from '@/editor/SpacingEditor';
+import { asRows, isRow, sourceDataError } from './coerce';
+import {
+  VALUE_SOURCE_PROPERTIES,
+  emptyValueHint,
+  mappedSourceValue,
+  valueSource,
+  valueSourceConfigured,
+} from './choiceSource';
 
 /**
  * Text.
@@ -36,41 +44,66 @@ const JUSTIFY: Record<string, string> = {
   bottom: 'justify-end',
 };
 
-function TextWidget({ properties, state, setState, fireEvent, isDesignMode }: WidgetProps) {
+function TextWidget({ properties, setState, fireEvent, isDesignMode }: WidgetProps) {
   const [copied, setCopied] = useState(false);
 
-  const text = useMemo(
-    () =>
-      formatValue(properties.text, {
-        format: properties.format as ValueFormat | undefined,
-        decimals: properties.decimals as number | undefined,
-        currency: properties.currency as string | undefined,
-        dateStyle: properties.dateStyle as 'short' | 'medium' | 'long' | undefined,
-        emptyText: properties.emptyText as string | undefined,
-        prefix: properties.prefix as string | undefined,
-        suffix: properties.suffix as string | undefined,
-      }),
-    [
-      properties.text,
-      properties.format,
-      properties.decimals,
-      properties.currency,
-      properties.dateStyle,
-      properties.emptyText,
-      properties.prefix,
-      properties.suffix,
-    ],
-  );
+  const source = valueSource(properties);
+  const configured = valueSourceConfigured(properties);
+  const sourceError = sourceDataError(source);
+  const rows = useMemo(() => asRows(source), [source]);
+  const item = rows[0] ?? (isRow(source) ? source : null);
+  const value = configured ? mappedSourceValue(properties, item, source) : undefined;
+  const queryError = typeof properties.queryError === 'string' ? properties.queryError : '';
+  const loading = Boolean(properties.sourceLoading);
 
-  /*
-   * Published so other widgets can bind to what is on screen rather than
-   * rebuilding it. Guarded by a comparison: writing on every render would
-   * re-render the page on every render.
-   */
+  const text = useMemo(() => {
+    if (configured && loading) return 'Loading…';
+    if (configured && queryError) return queryError;
+    if (configured && sourceError) return sourceError;
+
+    const raw = configured ? value : properties.text;
+    const formatted = formatValue(raw, {
+      format: properties.format as ValueFormat | undefined,
+      decimals: properties.decimals as number | undefined,
+      currency: properties.currency as string | undefined,
+      dateStyle: properties.dateStyle as 'short' | 'medium' | 'long' | undefined,
+      emptyText: properties.emptyText as string | undefined,
+      prefix: properties.prefix as string | undefined,
+      suffix: properties.suffix as string | undefined,
+    });
+    if (configured && formatted === '') return emptyValueHint(properties);
+    return formatted;
+  }, [
+    configured,
+    loading,
+    queryError,
+    sourceError,
+    value,
+    properties,
+  ]);
+
+  const snapshot = JSON.stringify({
+    text,
+    value: value ?? null,
+    rowCount: rows.length,
+    item,
+  });
+  const previous = useRef('');
   useEffect(() => {
-    if (state.text !== text) setState({ text });
+    if (previous.current === snapshot) return;
+    previous.current = snapshot;
+    setState({
+      text,
+      data: item ?? value ?? null,
+      item,
+      value: value ?? null,
+      rowCount: rows.length,
+    });
+    // Host recreates setState each render; depending on it would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, state.text]);
+  }, [snapshot, text, item, value, rows.length]);
+
+  const errored = configured && Boolean(queryError || sourceError);
 
   const actions = properties.onClick;
   const clickable = Array.isArray(actions) && actions.length > 0;
@@ -110,7 +143,9 @@ function TextWidget({ properties, state, setState, fireEvent, isDesignMode }: Wi
         }}
         className={clsx(
           'w-full min-h-0',
-          VARIANTS[String(properties.variant ?? 'body')] ?? VARIANTS.body,
+          errored
+            ? 'text-sm text-red-600'
+            : (VARIANTS[String(properties.variant ?? 'body')] ?? VARIANTS.body),
           /*
            * One overflow rule, chosen once. Setting `overflow-auto` alongside
            * `truncate` left the winner to stylesheet order rather than intent,
@@ -173,6 +208,10 @@ export const textWidget: RegisteredWidget = {
     events: [{ key: 'onClick', label: 'On click', payloadKeys: ['text'] }],
     exposedState: [
       { key: 'text', type: 'string', description: 'What is on screen, formatted' },
+      { key: 'value', type: 'any', description: 'The bound figure before formatting' },
+      { key: 'item', type: 'object', description: 'The first row of the bound data' },
+      { key: 'data', type: 'any', description: 'The row, or the scalar value when there is no row' },
+      { key: 'rowCount', type: 'number', description: 'How many rows the source returned' },
     ],
     properties: [
       {
@@ -185,6 +224,7 @@ export const textWidget: RegisteredWidget = {
             expectedType: 'any',
             bindable: true,
             defaultValue: 'Text',
+            visibleWhen: { key: 'sourceKind', oneOf: ['none', undefined] },
           },
           {
             key: 'format',
@@ -262,6 +302,10 @@ export const textWidget: RegisteredWidget = {
             helpText: 'An em dash reads better than a blank space in a table of values.',
           },
         ],
+      },
+      {
+        name: 'Data',
+        properties: VALUE_SOURCE_PROPERTIES,
       },
       {
         name: 'Layout',

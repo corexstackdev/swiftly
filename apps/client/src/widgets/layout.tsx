@@ -254,9 +254,9 @@ function TabsWidget({
   const showTabs = properties.showTabs !== false;
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden rounded border border-slate-200 bg-white">
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       {showTabs ? (
-        <div className="flex shrink-0 gap-1 border-b border-slate-200 px-2">
+        <div className="flex shrink-0 gap-0.5 border-b border-slate-200 bg-slate-50/50 px-1.5">
           {tabs.map((tab) => {
             const isActive = tab.id === activeId;
             const custom = styleFor(tab, isActive);
@@ -276,14 +276,14 @@ function TabsWidget({
                 }}
                 style={custom}
                 className={clsx(
-                  '-mb-px border-b-2 px-3 py-1.5 text-xs transition-colors',
+                  '-mb-px border-b-2 px-3 py-2 text-[13px] transition-colors',
                   isActive ? 'border-blue-600' : 'border-transparent',
                   // The widget's own colours apply only where the tab has not set
                   // its own, so a customised tab is not fighting them.
                   custom.color === undefined &&
                     (isActive
                       ? 'font-medium text-slate-900'
-                      : 'text-slate-500 hover:text-slate-700'),
+                      : 'text-slate-500 hover:text-slate-800'),
                 )}
               >
                 <TabContent tab={tab} />

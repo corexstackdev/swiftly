@@ -166,6 +166,14 @@ export class MysqlPlugin implements DatasourcePlugin<MysqlConfig, QueryDefinitio
   async introspect(config: MysqlConfig): Promise<DbSchema> {
     const connection = await mysql.createConnection(this.toOptions(config));
     try {
+      const [tableList] = await connection.query<mysql.RowDataPacket[]>(
+        `SELECT TABLE_NAME, TABLE_TYPE
+           FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = ?
+          ORDER BY TABLE_NAME`,
+        [config.database],
+      );
+
       const [columnRows] = await connection.query<mysql.RowDataPacket[]>(
         `SELECT c.TABLE_SCHEMA, c.TABLE_NAME, t.TABLE_TYPE,
                 c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE
@@ -190,6 +198,13 @@ export class MysqlPlugin implements DatasourcePlugin<MysqlConfig, QueryDefinitio
       );
 
       const tables = new Map<string, { kind: 'table' | 'view'; columns: ColumnMetadata[] }>();
+      for (const row of tableList) {
+        const name = String(row.TABLE_NAME);
+        tables.set(name, {
+          kind: row.TABLE_TYPE === 'VIEW' ? 'view' : 'table',
+          columns: [],
+        });
+      }
       for (const row of columnRows) {
         const name = String(row.TABLE_NAME);
         let table = tables.get(name);

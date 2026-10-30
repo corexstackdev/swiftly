@@ -150,14 +150,25 @@ export interface RoutineMetadata {
   returnsSet?: boolean;
 }
 
+export interface SchemaPrivileges {
+  /** Can look up and read objects in this schema. */
+  usage: boolean;
+  /** Can create or alter tables in this schema. */
+  create: boolean;
+}
+
 export interface SchemaNamespace {
   name: string;
   tables: TableMetadata[];
   routines: RoutineMetadata[];
+  owner?: string;
+  privileges?: SchemaPrivileges;
 }
 
 export interface DbSchema {
   fetchedAt: string;
+  /** Database role this connection is using. */
+  connectedUser?: string;
   schemas: SchemaNamespace[];
 }
 

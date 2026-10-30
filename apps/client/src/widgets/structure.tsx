@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import clsx from 'clsx';
 import type { WidgetDsl } from '@swiftly/shared';
 import type { RegisteredWidget, WidgetProps } from './types';
@@ -34,9 +33,9 @@ function childProperties(
  * ------------------------------------------------------------------ */
 
 function CardWidget({ properties, renderChildren, isDesignMode }: WidgetProps) {
+  const shadow = properties.shadow !== false;
   const title = asString(properties.title);
   const subtitle = asString(properties.subtitle);
-  const shadow = properties.shadow !== false;
 
   return (
     <div

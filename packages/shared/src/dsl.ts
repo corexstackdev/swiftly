@@ -114,11 +114,30 @@ export interface NavItemDsl {
   visibleWhen?: string;
 }
 
+export type SidebarPosition = 'left' | 'right';
+export type NavAppearance = 'dark' | 'light' | 'brand';
+
+export const DEFAULT_SIDEBAR_WIDTH = 224;
+export const MIN_SIDEBAR_WIDTH = 156;
+export const MAX_SIDEBAR_WIDTH = 360;
+export const COLLAPSED_SIDEBAR_WIDTH = 56;
+
 export interface NavigationDsl {
   style: 'sidebar' | 'topbar' | 'none';
   title?: string;
   collapsedByDefault?: boolean;
+  /** Sidebar only. Defaults to left. */
+  sidebarPosition?: SidebarPosition;
+  /** Expanded sidebar width in pixels. */
+  sidebarWidth?: number;
+  /** Colour treatment for the app chrome. Sidebar defaults to dark. */
+  appearance?: NavAppearance;
   items: NavItemDsl[];
+}
+
+export function resolveSidebarWidth(width: number | undefined): number {
+  const value = width ?? DEFAULT_SIDEBAR_WIDTH;
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(value)));
 }
 
 export interface ThemeDsl {

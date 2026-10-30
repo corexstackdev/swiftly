@@ -22,8 +22,13 @@ export type TableRowActionKind = 'edit' | 'delete' | 'download';
 
 export interface TableRowAction {
   kind: TableRowActionKind;
-  /** Button label. Falls back to Edit / Delete / Download. */
+  /** Button label. With an icon, blank means icon-only. */
   label?: string;
+  /**
+   * react-icons export name (`FiEdit2`) or a short emoji. Omitted uses the
+   * kind's default; an empty string is an explicit "text only".
+   */
+  icon?: string;
   /** Download: column holding a URL or the file contents. */
   downloadKey?: string;
   /** Download: column holding the file name. */
@@ -35,11 +40,12 @@ export interface TableRowAction {
 export const TABLE_ROW_ACTION_KINDS: {
   kind: TableRowActionKind;
   label: string;
+  icon: string;
   event: 'onRowEdit' | 'onRowDelete' | 'onRowDownload';
 }[] = [
-  { kind: 'edit', label: 'Edit', event: 'onRowEdit' },
-  { kind: 'delete', label: 'Delete', event: 'onRowDelete' },
-  { kind: 'download', label: 'Download', event: 'onRowDownload' },
+  { kind: 'edit', label: 'Edit', icon: 'FiEdit2', event: 'onRowEdit' },
+  { kind: 'delete', label: 'Delete', icon: 'FiTrash2', event: 'onRowDelete' },
+  { kind: 'download', label: 'Download', icon: 'FiDownload', event: 'onRowDownload' },
 ];
 
 export function actionMeta(kind: TableRowActionKind) {
@@ -54,6 +60,7 @@ export interface TableColumnConfig {
   key: string;
   label?: string;
   width?: number;
+  /** Omitted from the table. Stays in this list so it can be shown again. */
   hidden?: boolean;
   align?: 'left' | 'center' | 'right';
   /** Cells can be typed into, and the edit is published rather than written back. */
@@ -121,6 +128,7 @@ function normaliseActions(value: unknown): TableRowAction[] {
     actions.push({
       kind,
       label: typeof entry.label === 'string' && entry.label.trim() !== '' ? entry.label : undefined,
+      icon: typeof entry.icon === 'string' ? entry.icon : undefined,
       downloadKey: typeof entry.downloadKey === 'string' ? entry.downloadKey : undefined,
       fileNameKey: typeof entry.fileNameKey === 'string' ? entry.fileNameKey : undefined,
       onClick: normaliseHandlers(entry.onClick),
@@ -140,6 +148,19 @@ function normaliseHandlers(value: unknown): ActionDsl[] | undefined {
   return handlers.length > 0 ? handlers : undefined;
 }
 
+/** One data column per key, with optional keys already hidden. */
+export function seedDataColumns(
+  keys: string[],
+  hiddenKeys: Iterable<string> = [],
+): TableColumnConfig[] {
+  const hidden = hiddenKeys instanceof Set ? hiddenKeys : new Set(hiddenKeys);
+  return keys.map((key) => ({
+    key,
+    source: 'data' as const,
+    ...(hidden.has(key) ? { hidden: true } : {}),
+  }));
+}
+
 export function defaultActionsColumn(existing: TableColumnConfig[]): TableColumnConfig {
   let index = 1;
   let key = 'actions';
@@ -151,9 +172,12 @@ export function defaultActionsColumn(existing: TableColumnConfig[]): TableColumn
     key,
     label: 'Actions',
     source: 'actions',
-    width: 168,
+    width: 96,
     align: 'right',
-    actions: [{ kind: 'edit' }, { kind: 'delete' }],
+    actions: [
+      { kind: 'edit', icon: 'FiEdit2' },
+      { kind: 'delete', icon: 'FiTrash2' },
+    ],
   };
 }
 
@@ -162,8 +186,15 @@ export function defaultActionsColumn(existing: TableColumnConfig[]): TableColumn
  *
  * With nothing configured the table shows every key of the first row, which is
  * what makes a freshly bound query useful immediately. Once columns are
- * configured they are the whole truth — including their order, and including
- * static columns the data has never heard of.
+ * configured they are the whole truth — including their order, including
+ * columns marked hidden, and including static columns the data has never heard
+ * of.
+ *
+ * Hidden is a setting on a configured column, not the same as a missing one.
+ * Filtering hidden columns out before recording which keys are already claimed
+ * made hide a no-op: the key looked new and was appended visible again. Known
+ * keys therefore include hidden columns, and an empty visible list after a
+ * real configuration means the builder hid everything, not "show all".
  *
  * A configured column whose key has since vanished from the data is kept rather
  * than dropped: a query that stops returning a field is a thing to notice, and
@@ -179,13 +210,13 @@ export function resolveColumns(
       ? Object.keys(firstRow)
       : [];
   const dataKeys = uniqueKeys([...sourceColumns, ...rowKeys]);
-  const visible = configured.filter((column) => !column.hidden);
 
-  if (visible.length === 0) {
+  if (configured.length === 0) {
     return dataKeys.map((key) => ({ key, source: 'data' as const }));
   }
 
-  const known = new Set(visible.map((column) => column.key));
+  const visible = configured.filter((column) => !column.hidden);
+  const known = new Set(configured.map((column) => column.key));
   const missing = dataKeys.filter((key) => !known.has(key));
   if (missing.length === 0) return visible;
 

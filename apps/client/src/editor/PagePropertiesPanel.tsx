@@ -1,10 +1,15 @@
-import clsx from 'clsx';
 import {
+  DEFAULT_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
   isAppLevelEntity,
+  resolveSidebarWidth,
   type ApplicationDsl,
   type AppLayoutId,
+  type NavAppearance,
   type PageDsl,
   type PageLayoutId,
+  type SidebarPosition,
 } from '@swiftly/shared';
 import {
   pageQueryVariableOverrides,
@@ -12,6 +17,7 @@ import {
 } from '@/evaluation/queryVariables';
 import { NavItemsEditor } from './NavItemsEditor';
 import { AppLayoutPicker, PageLayoutPicker } from './LayoutOptions';
+import { ColorField, SegmentedControl, Switch, control } from './controls';
 
 /**
  * Shown when no widget is selected.
@@ -51,24 +57,14 @@ export function PagePropertiesPanel({
   return (
     <div className="flex h-full flex-col overflow-auto">
       <Section title="Canvas size">
-        <div className="flex gap-1">
-          {CANVAS_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              title={preset.width ? `${preset.label} — ${preset.width}px` : preset.label}
-              onClick={() => onCanvasPresetChange(preset.id)}
-              className={clsx(
-                'flex-1 rounded border px-1 py-1.5 text-xs',
-                canvasPreset === preset.id
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-slate-300 text-slate-500 hover:bg-slate-50',
-              )}
-            >
-              {preset.icon}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          value={canvasPreset}
+          options={CANVAS_PRESETS.map((preset) => ({
+            value: preset.id,
+            label: preset.label,
+          }))}
+          onChange={(next) => onCanvasPresetChange(next as CanvasPresetId)}
+        />
         <p className="mt-1.5 text-[11px] text-slate-400">
           Changes the canvas width only. Widget positions are stored in grid units, so
           nothing moves in the app.
@@ -85,7 +81,7 @@ export function PagePropertiesPanel({
                   draft.name = event.target.value;
                 }, 'page-name')
               }
-              className={inputClass}
+              className={control}
             />
           </Field>
 
@@ -98,7 +94,7 @@ export function PagePropertiesPanel({
                 }, 'page-slug')
               }
               placeholder="orders/:orderId"
-              className={`${inputClass} font-mono text-xs`}
+              className={`${control} font-mono`}
             />
           </Field>
 
@@ -119,7 +115,7 @@ export function PagePropertiesPanel({
                 }, 'page-permissions')
               }
               placeholder="app:view"
-              className={`${inputClass} resize-y font-mono text-xs`}
+              className={`${control} resize-y font-mono`}
             />
           </Field>
         </Section>
@@ -155,9 +151,105 @@ export function PagePropertiesPanel({
                 draft.navigation.title = event.target.value;
               }, 'nav-title')
             }
-            className={inputClass}
+            className={control}
           />
         </Field>
+
+        {dsl.navigation.style !== 'none' && (
+          <Field label="Look" help="Dark fills the page like a product shell. Brand uses the theme colour.">
+            <SegmentedControl
+              value={dsl.navigation.appearance ?? 'dark'}
+              options={[
+                { value: 'dark', label: 'Dark' },
+                { value: 'light', label: 'Light' },
+                { value: 'brand', label: 'Brand' },
+              ]}
+              onChange={(next) =>
+                onAppChange((draft) => {
+                  draft.navigation.appearance = next as NavAppearance;
+                }, 'nav-appearance')
+              }
+            />
+          </Field>
+        )}
+
+        {dsl.navigation.style === 'sidebar' && (
+          <>
+            <Field label="Side">
+              <SegmentedControl
+                value={dsl.navigation.sidebarPosition ?? 'left'}
+                options={[
+                  { value: 'left', label: 'Left' },
+                  { value: 'right', label: 'Right' },
+                ]}
+                onChange={(next) =>
+                  onAppChange((draft) => {
+                    draft.navigation.sidebarPosition = next as SidebarPosition;
+                  }, 'nav-side')
+                }
+              />
+            </Field>
+
+            <Field
+              label="Width"
+              help={`How wide the side panel is (${MIN_SIDEBAR_WIDTH}–${MAX_SIDEBAR_WIDTH} px). It always runs the full height of the page.`}
+            >
+              <SegmentedControl
+                value={String(
+                  [180, DEFAULT_SIDEBAR_WIDTH, 280].includes(
+                    resolveSidebarWidth(dsl.navigation.sidebarWidth),
+                  )
+                    ? resolveSidebarWidth(dsl.navigation.sidebarWidth)
+                    : 'custom',
+                )}
+                options={[
+                  { value: '180', label: 'Narrow' },
+                  { value: String(DEFAULT_SIDEBAR_WIDTH), label: 'Default' },
+                  { value: '280', label: 'Wide' },
+                ]}
+                onChange={(next) =>
+                  onAppChange((draft) => {
+                    draft.navigation.sidebarWidth = Number(next);
+                  }, 'nav-width')
+                }
+              />
+              <div className="mt-1.5 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={MIN_SIDEBAR_WIDTH}
+                  max={MAX_SIDEBAR_WIDTH}
+                  value={resolveSidebarWidth(dsl.navigation.sidebarWidth)}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (!Number.isFinite(next)) return;
+                    onAppChange((draft) => {
+                      draft.navigation.sidebarWidth = resolveSidebarWidth(next);
+                    }, 'nav-width');
+                  }}
+                  className={control}
+                />
+                <span className="text-[11px] text-slate-400">px</span>
+              </div>
+            </Field>
+
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-600">Start collapsed</p>
+                <p className="text-[11px] text-slate-400">
+                  Opens as an icon rail until someone expands it.
+                </p>
+              </div>
+              <Switch
+                checked={Boolean(dsl.navigation.collapsedByDefault)}
+                onChange={(next) =>
+                  onAppChange((draft) => {
+                    draft.navigation.collapsedByDefault = next;
+                  }, 'nav-collapsed')
+                }
+              />
+            </div>
+          </>
+        )}
 
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium text-slate-600">Links</span>
@@ -170,31 +262,29 @@ export function PagePropertiesPanel({
 
       <Section title="Theme">
         <Field label="Primary colour">
-          <input
-            type="color"
+          <ColorField
             value={dsl.theme.primaryColor}
-            onChange={(event) =>
+            onChange={(next) =>
               onAppChange((draft) => {
-                draft.theme.primaryColor = event.target.value;
+                draft.theme.primaryColor = next;
               }, 'theme')
             }
-            className="h-8 w-16 cursor-pointer rounded border border-slate-300"
           />
         </Field>
 
         <Field label="Density">
-          <select
+          <SegmentedControl
             value={dsl.theme.density}
-            onChange={(event) =>
+            options={[
+              { value: 'comfortable', label: 'Comfortable' },
+              { value: 'compact', label: 'Compact' },
+            ]}
+            onChange={(next) =>
               onAppChange((draft) => {
-                draft.theme.density = event.target.value as 'compact' | 'comfortable';
+                draft.theme.density = next as 'compact' | 'comfortable';
               }, 'theme')
             }
-            className={inputClass}
-          >
-            <option value="comfortable">Comfortable</option>
-            <option value="compact">Compact</option>
-          </select>
+          />
         </Field>
       </Section>
 
@@ -204,9 +294,6 @@ export function PagePropertiesPanel({
     </div>
   );
 }
-
-const inputClass =
-  'w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none transition-colors hover:border-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -285,7 +372,7 @@ function PageQueryInputs({
                       setPageQueryVariableValue(draft, query.id, variable.name, event.target.value);
                     }, 'page-query-input')
                   }
-                  className={`${inputClass} font-mono`}
+                  className={`${control} font-mono`}
                 />
               </Field>
             ))}

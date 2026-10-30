@@ -12,7 +12,7 @@ export const APP_LAYOUTS = [
   {
     id: 'sidebar',
     label: 'Sidebar',
-    description: 'Links down the left. Best when the app has several pages.',
+    description: 'A full-height side panel. Position, width and look are set in App layout.',
   },
   {
     id: 'topbar',

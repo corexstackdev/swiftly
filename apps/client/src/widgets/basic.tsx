@@ -7,6 +7,7 @@ import { spacingChromeRows, spacingToCss } from '@/editor/SpacingEditor';
 import { FieldLabel, LABEL_PROPERTIES } from './FieldLabel';
 import { fieldControlStyle, textStyleProperties, textStyleToCss } from './textStyle';
 import { mergeFieldRules, showFieldError, validate } from './validation';
+import { fieldErrorClass, fieldSurfaceClass } from './fieldChrome';
 
 /* ------------------------------------------------------------------ *
  * Input
@@ -44,14 +45,9 @@ function InputWidget({ properties, state, setState, fireEvent, isDesignMode }: W
           fireEvent('onChange', { value: next });
         }}
         onBlur={() => setState({ touched: true })}
-        className={clsx(
-          'no-drag min-h-0 w-full flex-1 rounded border px-2 outline-none',
-          'focus:ring-2 focus:ring-blue-500/30',
-          showError ? 'border-red-400 focus:border-red-500' : 'border-slate-300 focus:border-blue-500',
-          'disabled:bg-slate-50 disabled:text-slate-400',
-        )}
+        className={clsx('flex-1', fieldSurfaceClass(showError))}
       />
-      {showError && <p className="text-xs text-red-600">{result.errors[0]}</p>}
+      {showError && <p className={fieldErrorClass}>{result.errors[0]}</p>}
     </div>
   );
 }
@@ -119,7 +115,7 @@ function ContainerWidget({ properties, renderChildren, isDesignMode }: WidgetPro
         // the last row of children ends up behind a scrollbar.
         'flex h-full w-full flex-col',
         isDesignMode ? 'overflow-visible' : 'overflow-hidden',
-        properties.bordered !== false && 'rounded border border-slate-200',
+        properties.bordered !== false && 'rounded-xl border border-slate-200/80 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
       )}
       style={{ background: String(properties.background ?? '#ffffff') }}
     >

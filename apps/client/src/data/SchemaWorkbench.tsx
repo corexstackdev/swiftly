@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
-import type { ColumnSpec, DbSchema, SchemaNamespace, TableMetadata } from '@swiftly/shared';
+import {
+  schemaAccessPayload,
+  type ColumnSpec,
+  type DbSchema,
+  type SchemaNamespace,
+  type TableMetadata,
+} from '@swiftly/shared';
 import { api, type DatasourceSummary, type PluginInfo } from '@/lib/api';
 import { TableDataEditor } from './TableDataEditor';
 import { ColumnFields, TableStructureEditor } from './TableStructureEditor';
 import { emptyColumn, formatCell, formatError, idColumn } from './columnTypes';
+import { SchemaAccessPanel, schemaAccessFromError } from './SchemaAccessPanel';
 
 type Pane = 'data' | 'columns';
 
@@ -31,10 +38,11 @@ export function SchemaWorkbench({
   const [reloadToken, setReloadToken] = useState(0);
   const [newSchemaOpen, setNewSchemaOpen] = useState(false);
   const [newTableOpen, setNewTableOpen] = useState<string | null>(null);
+  const [blockedWriteSchema, setBlockedWriteSchema] = useState<string | null>(null);
 
   const loadSchema = useCallback(
     async (refresh = true): Promise<DbSchema | null> => {
-      if (!plugin.capabilities.introspection) return null;
+      if (!plugin.capabilities.introspection || !environmentId) return null;
       setLoading(true);
       setError(null);
       try {
@@ -51,8 +59,16 @@ export function SchemaWorkbench({
     [datasource.id, environmentId, plugin.capabilities.introspection],
   );
 
+  const refreshAll = async (): Promise<void> => {
+    await loadSchema(true);
+    setReloadToken((value) => value + 1);
+  };
+
   useEffect(() => {
-    void loadSchema(false);
+    // Always read the live catalog when this screen opens. The 15-minute schema
+    // cache is for autocomplete in the editor; here the point is to show every
+    // table that already exists in the database.
+    void loadSchema(true);
   }, [loadSchema]);
 
   const namespaces = useMemo(() => {
@@ -76,6 +92,39 @@ export function SchemaWorkbench({
         ?.tables.find((table) => table.name === selected.table) ?? null
     );
   }, [schema, selected]);
+
+  const dbUser =
+    schema?.connectedUser ??
+    String(
+      datasource.environments.find((entry) => entry.environmentId === environmentId)?.config
+        ?.user ?? 'app_user',
+    );
+
+  const selectedNamespace = schema?.schemas.find((namespace) => namespace.name === selected?.schema);
+
+  const accessHint = useMemo(() => {
+    const namespace =
+      selectedNamespace ??
+      schema?.schemas.find((entry) => entry.name === blockedWriteSchema) ??
+      null;
+    if (!namespace) return null;
+    const needsUsage = namespace.privileges?.usage === false;
+    const needsCreate =
+      blockedWriteSchema === namespace.name && namespace.privileges?.create === false;
+    if (!needsUsage && !needsCreate) return null;
+    const hint = schemaAccessPayload({
+      schema: namespace.name,
+      dbUser,
+      owner: namespace.owner,
+    });
+    if (!needsUsage && needsCreate) {
+      return {
+        ...hint,
+        message: `This connection (${dbUser}) can read schema “${namespace.name}” but cannot create or change tables in it.`,
+      };
+    }
+    return hint;
+  }, [selectedNamespace, schema, blockedWriteSchema, dbUser]);
 
   const afterDdl = async (nextTable?: { schema: string; table: string }): Promise<void> => {
     const next = await loadSchema(true);
@@ -103,9 +152,9 @@ export function SchemaWorkbench({
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="flex w-72 shrink-0 flex-col border-r border-slate-200">
-        <div className="flex items-center justify-between px-3 py-2">
+        <div className="flex items-center justify-between gap-2 px-3 py-2">
           <span className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
-            Schema
+            Tables
           </span>
           <div className="flex items-center gap-1">
             {canManage && (
@@ -118,17 +167,14 @@ export function SchemaWorkbench({
                 +
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void loadSchema(true)}
-              disabled={loading}
-              title="Refresh schema"
-              className="rounded px-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
-            >
-              ⟳
-            </button>
+            <RefreshButton loading={loading} onClick={() => void refreshAll()} label="Refresh" />
           </div>
         </div>
+        {schema?.fetchedAt && (
+          <p className="px-3 pb-1 text-[10px] text-slate-400">
+            {loading ? 'Updating…' : `Updated ${formatFetchedAt(schema.fetchedAt)}`}
+          </p>
+        )}
 
         <div className="px-3 pb-2">
           <input
@@ -147,14 +193,32 @@ export function SchemaWorkbench({
             <p className="mx-1 rounded bg-red-50 px-2 py-1.5 text-xs text-red-700">{error}</p>
           )}
 
+          {namespaces.some((namespace) => namespace.privileges?.usage === false) && (
+            <p className="mb-2 rounded bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
+              Some schemas need access. Select one to see how to fix it.
+            </p>
+          )}
+
           {namespaces.map((namespace) => (
             <SchemaGroup
               key={namespace.name}
               namespace={namespace}
               selected={selected}
               canManage={canManage}
-              onSelect={setSelected}
-              onNewTable={() => setNewTableOpen(namespace.name)}
+              onSelect={(table) => {
+                setBlockedWriteSchema(null);
+                setSelected(table);
+              }}
+              onNewTable={() => {
+                if (namespace.privileges && !namespace.privileges.create) {
+                  setBlockedWriteSchema(namespace.name);
+                  if (namespace.tables[0]) {
+                    setSelected({ schema: namespace.name, table: namespace.tables[0].name });
+                  }
+                  return;
+                }
+                setNewTableOpen(namespace.name);
+              }}
               onDropSchema={async () => {
                 if (namespace.name === 'public') return;
                 if (!window.confirm(`Drop schema “${namespace.name}”? It must be empty.`)) return;
@@ -225,9 +289,17 @@ export function SchemaWorkbench({
 
           {schema && namespaces.length === 0 && (
             <p className="px-2 py-3 text-xs text-slate-400">
-              {search ? `No tables match “${search}”` : 'No schemas yet'}
+              {search ? `No tables match “${search}”` : 'No schemas in this database'}
             </p>
           )}
+
+          {schema &&
+            !search &&
+            schema.schemas.reduce((count, namespace) => count + namespace.tables.length, 0) === 0 && (
+              <p className="px-2 py-3 text-xs text-slate-400">
+                No tables in this database yet. If they already exist, click Refresh to fetch them.
+              </p>
+            )}
 
           {canManage && schema && (schema.schemas.reduce((n, ns) => n + ns.tables.length, 0) === 0) && (
             <button
@@ -245,11 +317,10 @@ export function SchemaWorkbench({
         {!selected || !selectedMeta ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
             <p className="text-sm text-slate-500">Select a table to inspect its columns and rows</p>
-            {canManage && (
-              <p className="max-w-sm text-xs text-slate-400">
-                Create schemas and tables here, then bind queries to them in the editor.
-              </p>
-            )}
+            <p className="max-w-sm text-xs text-slate-400">
+              Every table already in this database is listed on the left. Use Refresh if something
+              was added outside Swiftly.
+            </p>
           </div>
         ) : (
           <>
@@ -289,7 +360,16 @@ export function SchemaWorkbench({
               </div>
             </div>
 
-            {pane === 'data' ? (
+            {accessHint ? (
+              <SchemaAccessPanel
+                hint={accessHint}
+                refreshing={loading}
+                onRefresh={() => {
+                  setBlockedWriteSchema(null);
+                  void refreshAll();
+                }}
+              />
+            ) : pane === 'data' ? (
               canManage ? (
                 <TableDataEditor
                   key={`${selected.schema}.${selected.table}`}
@@ -299,6 +379,9 @@ export function SchemaWorkbench({
                   table={selected.table}
                   canManage={selectedMeta.kind === 'table'}
                   reloadToken={reloadToken}
+                  dbUser={dbUser}
+                  owner={selectedNamespace?.owner}
+                  onAccessFixed={() => void refreshAll()}
                 />
               ) : (
                 <ReadOnlyPreview
@@ -307,6 +390,10 @@ export function SchemaWorkbench({
                   environmentId={environmentId}
                   schema={selected.schema}
                   table={selected.table}
+                  reloadToken={reloadToken}
+                  dbUser={dbUser}
+                  owner={selectedNamespace?.owner}
+                  onAccessFixed={() => void refreshAll()}
                 />
               )
             ) : (
@@ -387,6 +474,14 @@ function SchemaGroup({
           <span className="w-3 text-slate-400">{open ? '▾' : '▸'}</span>
           <span className="truncate">{namespace.name}</span>
           <span className="font-normal text-slate-400">{namespace.tables.length}</span>
+          {namespace.privileges?.usage === false && (
+            <span
+              className="shrink-0 font-normal normal-case tracking-normal text-amber-700"
+              title="This connection cannot read this schema"
+            >
+              needs access
+            </span>
+          )}
         </button>
         {canManage && (
           <>
@@ -454,6 +549,50 @@ function SchemaGroup({
         ))}
     </div>
   );
+}
+
+function RefreshButton({
+  loading,
+  onClick,
+  label,
+}: {
+  loading: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      title="Fetch the latest tables and rows from the database"
+      className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+        fill="none"
+        aria-hidden="true"
+        className={loading ? 'animate-spin' : undefined}
+      >
+        <path
+          d="M10 6A4 4 0 1 1 8.2 2.4"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        />
+        <path d="M8.6 1.2v2.2H6.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {loading ? 'Refreshing…' : label}
+    </button>
+  );
+}
+
+function formatFetchedAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
 function PaneButton({
@@ -699,23 +838,31 @@ function ReadOnlyPreview({
   environmentId,
   schema,
   table,
+  reloadToken,
+  dbUser,
+  owner,
+  onAccessFixed,
 }: {
   applicationId: string;
   datasourceId: string;
   environmentId: string;
   schema: string;
   table: string;
+  reloadToken: number;
+  dbUser?: string;
+  owner?: string;
+  onAccessFixed?: () => void;
 }) {
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setRows(null);
+  const load = useCallback(async (): Promise<void> => {
+    setBusy(true);
     setError(null);
-    api.queries
-      .run(applicationId, {
+    try {
+      const result = await api.queries.run(applicationId, {
         datasourceId,
         environmentId,
         definition: {
@@ -726,55 +873,80 @@ function ReadOnlyPreview({
           limit: '50',
         },
         bindings: {},
-      })
-      .then((result) => {
-        if (cancelled) return;
-        setRows(result.rows);
-        setColumns(result.columns?.map((column) => column.name) ?? Object.keys(result.rows[0] ?? {}));
-      })
-      .catch((caught) => !cancelled && setError(formatError(caught)));
-    return () => {
-      cancelled = true;
-    };
+      });
+      setRows(result.rows);
+      setColumns(result.columns?.map((column) => column.name) ?? Object.keys(result.rows[0] ?? {}));
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
   }, [applicationId, datasourceId, environmentId, schema, table]);
 
-  if (error) {
-    return <pre className="m-4 rounded bg-red-50 p-3 text-xs whitespace-pre-wrap text-red-700">{error}</pre>;
-  }
-  if (!rows) {
-    return <div className="flex flex-1 items-center justify-center text-sm text-slate-400">Loading rows…</div>;
-  }
-  if (rows.length === 0) {
-    return <div className="flex flex-1 items-center justify-center text-sm text-slate-400">This table is empty</div>;
+  useEffect(() => {
+    void load();
+  }, [load, reloadToken]);
+
+  const accessHint = schemaAccessFromError(
+    error,
+    dbUser ? { schema, dbUser, owner } : undefined,
+  );
+
+  if (accessHint) {
+    return (
+      <SchemaAccessPanel
+        hint={accessHint}
+        refreshing={busy}
+        onRefresh={() => {
+          if (onAccessFixed) onAccessFixed();
+          else void load();
+        }}
+      />
+    );
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      <table className="w-full border-collapse text-sm">
-        <thead className="sticky top-0 bg-white">
-          <tr>
-            {columns.map((column) => (
-              <th
-                key={column}
-                className="border-b border-slate-200 px-3 py-2 text-left text-xs font-semibold whitespace-nowrap text-slate-600"
-              >
-                {column}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={index} className="border-b border-slate-100">
-              {columns.map((column) => (
-                <td key={column} className="max-w-64 truncate px-3 py-1.5 text-slate-700">
-                  {formatCell(row[column])}
-                </td>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 justify-end border-b border-slate-100 px-3 py-1.5">
+        <RefreshButton loading={busy} onClick={() => void load()} label="Refresh" />
+      </div>
+      {error ? (
+        <pre className="m-4 rounded bg-red-50 p-3 text-xs whitespace-pre-wrap text-red-700">
+          {formatError(error)}
+        </pre>
+      ) : !rows ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-slate-400">Loading rows…</div>
+      ) : rows.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-slate-400">This table is empty</div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead className="sticky top-0 bg-white">
+              <tr>
+                {columns.map((column) => (
+                  <th
+                    key={column}
+                    className="border-b border-slate-200 px-3 py-2 text-left text-xs font-semibold whitespace-nowrap text-slate-600"
+                  >
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={index} className="border-b border-slate-100">
+                  {columns.map((column) => (
+                    <td key={column} className="max-w-64 truncate px-3 py-1.5 text-slate-700">
+                      {formatCell(row[column])}
+                    </td>
+                  ))}
+                </tr>
               ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

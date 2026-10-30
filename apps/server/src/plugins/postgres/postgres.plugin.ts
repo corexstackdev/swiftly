@@ -193,13 +193,37 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
     this.assertAllowed(config);
     const pool = new Pool({ ...this.toPoolConfig(config), max: 1 });
     try {
-      const [namespacesResult, columns, routines] = await Promise.all([
-        pool.query<{ schema_name: string }>(
-          `SELECT schema_name
-             FROM information_schema.schemata
-            WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
-              AND schema_name NOT LIKE 'pg\\_%' ESCAPE '\\'
-            ORDER BY schema_name`,
+      const [whoami, namespacesResult, tableRows, columns, routines] = await Promise.all([
+        pool.query<{ current_user: string }>('SELECT current_user'),
+        pool.query<{
+          schema_name: string;
+          owner: string;
+          can_usage: boolean;
+          can_create: boolean;
+        }>(
+          `SELECT n.nspname AS schema_name,
+                  pg_get_userbyid(n.nspowner) AS owner,
+                  has_schema_privilege(n.oid, 'USAGE') AS can_usage,
+                  has_schema_privilege(n.oid, 'CREATE') AS can_create
+             FROM pg_catalog.pg_namespace n
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+            ORDER BY n.nspname`,
+        ),
+        // information_schema.columns only returns tables the role can see columns on,
+        // so an empty or newly-created table would never appear. pg_class lists every
+        // relation in the connected database, including ones created outside Swiftly.
+        pool.query<{ table_schema: string; table_name: string; table_type: string }>(
+          `SELECT n.nspname AS table_schema,
+                  c.relname AS table_name,
+                  CASE WHEN c.relkind IN ('v', 'm') THEN 'VIEW' ELSE 'BASE TABLE' END AS table_type
+             FROM pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND NOT c.relispartition
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+            ORDER BY n.nspname, c.relname`,
         ),
         pool.query<{
           table_schema: string;
@@ -212,36 +236,36 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
           is_identity: string;
           is_primary_key: boolean;
         }>(
-          `SELECT c.table_schema, c.table_name, t.table_type,
-                  c.column_name,
-                  CASE
-                    WHEN c.character_maximum_length IS NOT NULL
-                         AND c.data_type IN ('character varying', 'character')
-                      THEN c.data_type || '(' || c.character_maximum_length || ')'
-                    WHEN c.data_type IN ('numeric', 'decimal') AND c.numeric_precision IS NOT NULL
-                      THEN c.data_type || '(' || c.numeric_precision
-                           || COALESCE(', ' || c.numeric_scale, '') || ')'
-                    ELSE c.data_type
-                  END AS data_type,
-                  c.is_nullable,
-                  c.column_default,
-                  c.is_identity,
+          // information_schema.columns only returns columns the role has privilege on,
+          // so existing warehouse tables often showed up empty. pg_attribute is the
+          // catalog every table already in this database actually lives in.
+          `SELECT n.nspname AS table_schema,
+                  c.relname AS table_name,
+                  CASE WHEN c.relkind IN ('v', 'm') THEN 'VIEW' ELSE 'BASE TABLE' END AS table_type,
+                  a.attname AS column_name,
+                  format_type(a.atttypid, a.atttypmod) AS data_type,
+                  CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                  pg_get_expr(ad.adbin, ad.adrelid) AS column_default,
+                  CASE WHEN a.attidentity IN ('a', 'd') THEN 'YES' ELSE 'NO' END AS is_identity,
                   EXISTS (
                     SELECT 1
-                      FROM information_schema.table_constraints tc
-                      JOIN information_schema.key_column_usage kcu
-                        ON kcu.constraint_name = tc.constraint_name
-                       AND kcu.table_schema = tc.table_schema
-                     WHERE tc.constraint_type = 'PRIMARY KEY'
-                       AND tc.table_schema = c.table_schema
-                       AND tc.table_name = c.table_name
-                       AND kcu.column_name = c.column_name
+                      FROM pg_index i
+                     WHERE i.indrelid = c.oid
+                       AND i.indisprimary
+                       AND a.attnum = ANY (i.indkey)
                   ) AS is_primary_key
-             FROM information_schema.columns c
-             JOIN information_schema.tables t
-               ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-            WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY c.table_schema, c.table_name, c.ordinal_position`,
+             FROM pg_catalog.pg_attribute a
+             JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             LEFT JOIN pg_catalog.pg_attrdef ad
+               ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+            WHERE a.attnum > 0
+              AND NOT a.attisdropped
+              AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND NOT c.relispartition
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+            ORDER BY n.nspname, c.relname, a.attnum`,
         ),
         pool.query<{
           routine_schema: string;
@@ -284,20 +308,41 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
 
       const namespaces = new Map<
         string,
-        { tables: Map<string, { kind: string; columns: ColumnMetadata[] }>; routines: RoutineMetadata[] }
+        {
+          tables: Map<string, { kind: string; columns: ColumnMetadata[] }>;
+          routines: RoutineMetadata[];
+          owner?: string;
+          privileges: { usage: boolean; create: boolean };
+        }
       >();
 
       const namespaceFor = (name: string) => {
         let entry = namespaces.get(name);
         if (!entry) {
-          entry = { tables: new Map(), routines: [] };
+          entry = {
+            tables: new Map(),
+            routines: [],
+            privileges: { usage: true, create: true },
+          };
           namespaces.set(name, entry);
         }
         return entry;
       };
 
       for (const row of namespacesResult.rows) {
-        namespaceFor(row.schema_name);
+        const ns = namespaceFor(row.schema_name);
+        ns.owner = row.owner;
+        ns.privileges = { usage: row.can_usage, create: row.can_create };
+      }
+
+      for (const row of tableRows.rows) {
+        const ns = namespaceFor(row.table_schema);
+        if (!ns.tables.has(row.table_name)) {
+          ns.tables.set(row.table_name, {
+            kind: row.table_type === 'VIEW' ? 'view' : 'table',
+            columns: [],
+          });
+        }
       }
 
       for (const row of columns.rows) {
@@ -335,8 +380,11 @@ export class PostgresPlugin implements DatasourcePlugin<PostgresConfig, QueryDef
 
       return {
         fetchedAt: new Date().toISOString(),
+        connectedUser: whoami.rows[0]?.current_user,
         schemas: [...namespaces.entries()].map(([name, entry]) => ({
           name,
+          owner: entry.owner,
+          privileges: entry.privileges,
           tables: [...entry.tables.entries()].map(([tableName, table]) => ({
             name: tableName,
             kind: table.kind as 'table' | 'view',
